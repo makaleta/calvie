@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="{{ lang }}">
+<head>
+    <meta charset="UTF-8">
+    <title>Events</title>
+    <style>
+        .event-list {
+            list-style-type: none;
+            padding: 0;
+            margin: 0;
+        }
+        .event-item {
+            margin-bottom: 5px;
+        }
+        .event-details {
+            list-style-type: none;
+            padding: 2px;
+            margin: 0;
+            font-weight: bold;
+        }
+        .event-time, .event-summary {
+            margin: 0;
+            color: #3d7787;
+        }
+        .event-time {
+            font-weight: normal;
+            color: #111111;
+        }
+        body {
+            width: {{ width }}px;
+            margin: 3px;
+            font-family: Tahoma, Verdana, sans-serif;
+            font-size: 12px;
+            font-stretch: condensed;
+        }
+        @media (prefers-color-scheme: dark) {
+            body {
+                background-color: #111;
+            }
+            .event-time {
+                color: ghostwhite;
+            }
+        }
+    </style>
+</head>
+<body>
+<ul class="event-list">
+    {% for event in events %}
+    <li class="event-item">
+        <ul class="event-details">
+            <li class="event-time">{{event.interval}}</li>
+            <li class="event-summary">{{event.summary}}</li>
+        </ul>
+    </li>
+    {% endfor %}
+</ul>
+</body>
+</html>

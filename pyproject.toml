@@ -1,0 +1,20 @@
+[tool.poetry]
+name = "calvie"
+version = "0.1.0"
+description = "Simple ical viewer"
+authors = ["Marek Kaleta <mk@m1k.cz>"]
+readme = "README.md"
+package-mode = false
+
+[tool.poetry.dependencies]
+python = "^3.12"
+fastapi = "^0.115.11"
+uvicorn = "^0.34.0"
+icalevents = "^0.2.1"
+jinja2 = "^3.1.6"
+babel = "^2.17.0"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
