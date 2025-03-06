@@ -2,6 +2,7 @@ import configparser
 import os
 import re
 from datetime import datetime, timedelta
+from typing import Literal
 
 import pytz
 from babel.dates import format_datetime, format_date, format_time, get_datetime_format, \
@@ -60,7 +61,8 @@ async def cal_data(name: str, timezone: str = None, days: int = None):
 
 @app.get("/iframe/{name:path}", response_class=HTMLResponse)
 async def iframe(request: Request, name: str, timezone: str = None, days: int = None,
-                 locale: str = None, width: int = None):
+                 locale: str = None, width: int = None,
+                 colour: Literal["white", "black"] = None):
     try:
         data = await cal_data(name, timezone, days)
     except HTTPException as e:
@@ -106,5 +108,5 @@ async def iframe(request: Request, name: str, timezone: str = None, days: int = 
     ev_minimal = [{"summary": e.summary, "interval": localize(e)} for e in data]
     return templates.TemplateResponse(request=request, name="iframe.html",
                                       context={"events": ev_minimal, "lang": locale,
-                                               "width": width},
+                                               "width": width, "force_scheme": colour},
                                       status_code=status.HTTP_200_OK)

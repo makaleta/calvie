@@ -33,26 +33,32 @@
             font-size: 12px;
             font-stretch: condensed;
         }
+        {%- if force_scheme != "white" %}
+        {%- if force_scheme != "black" %}
         @media (prefers-color-scheme: dark) {
+        {%- endif %}
             body {
                 background-color: #111;
             }
             .event-time {
                 color: ghostwhite;
             }
+        {%- if force_scheme != "black" %}
         }
+        {%- endif %}
+        {%- endif %}
     </style>
 </head>
 <body>
 <ul class="event-list">
-    {% for event in events %}
+    {%- for event in events %}
     <li class="event-item">
         <ul class="event-details">
             <li class="event-time">{{event.interval}}</li>
             <li class="event-summary">{{event.summary}}</li>
         </ul>
     </li>
-    {% endfor %}
+    {%- endfor %}
 </ul>
 </body>
 </html>
