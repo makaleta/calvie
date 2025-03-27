@@ -5,8 +5,7 @@ from datetime import datetime, timedelta
 from typing import Literal
 
 import pytz
-from babel.dates import format_datetime, format_date, format_time, get_datetime_format, \
-    get_date_format, get_time_format
+from babel.dates import format_datetime, format_date, format_time, get_datetime_format, get_date_format, get_time_format
 from fastapi import FastAPI, HTTPException
 from fastapi.templating import Jinja2Templates
 from icalevents.icalevents import events
@@ -15,12 +14,10 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse
 
 CONFIG = configparser.ConfigParser(interpolation=configparser.ExtendedInterpolation())
-CONFIG["DEFAULT"] = {"timezone": "UTC", "days to future": 40, "locale": "en_GB",
-                     "width": 300}
+CONFIG["DEFAULT"] = {"timezone": "UTC", "days to future": 40, "locale": "en_GB", "width": 300}
 CONFIG.read('config.ini')
 
-app = FastAPI(version=os.getenv('VERSION', 'DEVEL'), name="CalVie",
-    description="Simple Calendar viewer", )
+app = FastAPI(version=os.getenv('VERSION', 'DEVEL'), name="CalVie", description="Simple iCal viewer", )
 templates = Jinja2Templates(directory="templates")
 
 
@@ -60,23 +57,20 @@ async def cal_data(name: str, timezone: str = None, days: int = None):
 
 
 @app.get("/iframe/{name:path}", response_class=HTMLResponse)
-async def iframe(request: Request, name: str, timezone: str = None, days: int = None,
-                 locale: str = None, width: int = None,
-                 colour: Literal["white", "black"] = None):
+async def iframe(request: Request, name: str, timezone: str = None, days: int = None, locale: str = None,
+                 width: int = None, colour: Literal["white", "black"] = None):
     try:
         data = await cal_data(name, timezone, days)
     except HTTPException as e:
         return templates.TemplateResponse(request=request, name="error.html",
-                                          context={"detail": str(e),
-                                                   "status_code": e.status_code},
+                                          context={"detail": str(e), "status_code": e.status_code},
                                           status_code=e.status_code)
     # sieve and localize data
     try:
         config = CONFIG[name]
     except KeyError:
         config = CONFIG["DEFAULT"]
-    header_language = request.headers.get("accept-languages", "").split(",")[0].replace(
-        "-", "_").strip()
+    header_language = request.headers.get("accept-languages", "").split(",")[0].replace("-", "_").strip()
     locale = locale or header_language or config["locale"]
     tz = pytz.timezone(timezone or config["timezone"])
     width = width or int(config["width"])
@@ -88,8 +82,7 @@ async def iframe(request: Request, name: str, timezone: str = None, days: int = 
         date_str = date_str.strip(", ")
         date_str = f"EEE {date_str}"
         time_str = str(get_time_format("short", locale=locale))
-        datetime_str = str(get_datetime_format("long", locale=locale)).format(time_str,
-                                                                              date_str)
+        datetime_str = str(get_datetime_format("long", locale=locale)).format(time_str, date_str)
         if event.all_day:
             start = format_date(event.start.date(), date_str, locale=locale)
             end = format_date(event.end.date(), date_str, locale=locale)
@@ -107,6 +100,5 @@ async def iframe(request: Request, name: str, timezone: str = None, days: int = 
     data = sorted(data, key=lambda event: event.start)
     ev_minimal = [{"summary": e.summary, "interval": localize(e)} for e in data]
     return templates.TemplateResponse(request=request, name="iframe.html",
-                                      context={"events": ev_minimal, "lang": locale,
-                                               "width": width, "force_scheme": colour},
-                                      status_code=status.HTTP_200_OK)
+                                      context={"events": ev_minimal, "lang": locale, "width": width,
+                                               "force_scheme": colour}, status_code=status.HTTP_200_OK)
