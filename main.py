@@ -84,9 +84,10 @@ async def iframe(request: Request, name: str, timezone: str = None, days: int = 
         time_str = str(get_time_format("short", locale=locale))
         datetime_str = str(get_datetime_format("long", locale=locale)).format(time_str, date_str)
         if event.all_day:
+            end_datetime = event.end - timedelta(seconds=1)
             start = format_date(event.start.date(), date_str, locale=locale)
-            end = format_date(event.end.date(), date_str, locale=locale)
-            if event.start.date() == event.end.date():
+            end = format_date(end_datetime.date(), date_str, locale=locale)
+            if event.start.date() == end_datetime.date():
                 return start
             else:
                 return f"{start} - {end}"
