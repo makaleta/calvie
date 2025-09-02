@@ -58,7 +58,8 @@ async def cal_data(name: str, timezone: str = None, days: int = None):
 
 @app.get("/iframe/{name:path}", response_class=HTMLResponse)
 async def iframe(request: Request, name: str, timezone: str = None, days: int = None, locale: str = None,
-                 width: int = None, colour: Literal["white", "black"] = None):
+                 width: int = None, colour: Literal["white", "black"] = None, 
+                 color_scheme: Literal["normal", "light", "dark", "light dark", "dark light"] = None):
     try:
         data = await cal_data(name, timezone, days)
     except HTTPException as e:
@@ -74,6 +75,19 @@ async def iframe(request: Request, name: str, timezone: str = None, days: int = 
     locale = locale or header_language or config["locale"]
     tz = pytz.timezone(timezone or config["timezone"])
     width = width or int(config["width"])
+
+    # Handle color scheme - prioritize color_scheme over colour (deprecated)
+    # Map color_scheme values to template values for backward compatibility
+    if color_scheme is not None:
+        if color_scheme == "light":
+            effective_scheme = "white"
+        elif color_scheme == "dark":
+            effective_scheme = "black"
+        else:  # "normal", "light dark", "dark light"
+            effective_scheme = None
+    else:
+        # Fall back to deprecated colour parameter
+        effective_scheme = colour
 
     def localize(event) -> str:
         date_str = str(get_date_format("medium", locale=locale))
@@ -102,4 +116,5 @@ async def iframe(request: Request, name: str, timezone: str = None, days: int = 
     ev_minimal = [{"summary": e.summary, "interval": localize(e)} for e in data]
     return templates.TemplateResponse(request=request, name="iframe.html",
                                       context={"events": ev_minimal, "lang": locale, "width": width,
-                                               "force_scheme": colour}, status_code=status.HTTP_200_OK)
+                                               "force_scheme": effective_scheme, "color_scheme": color_scheme}, 
+                                      status_code=status.HTTP_200_OK)
