@@ -97,6 +97,17 @@ After making changes, ALWAYS test these key scenarios:
 4. **Configuration validation**:
    - Ensure config.ini exists and contains valid calendar configurations
    - Test with both configured calendar names and direct .ics URLs
+   - Example working test config for local development:
+     ```ini
+     [DEFAULT]
+     timezone = UTC
+     days to future = 40
+     locale = en_GB
+     width = 300
+     
+     [testcal]
+     url = file:///path/to/test_calendar.ics
+     ```
 
 ### Test Infrastructure
 - **Run tests before committing**: `poetry run pytest -v`
@@ -202,3 +213,27 @@ Development dependencies:
 - **Docker networking**: Container exposes port 8080, not 8000 like development server
 
 ALWAYS test your changes with the validation scenarios above and run the test suite before committing code.
+
+## Quick Reference - Common Commands
+
+### Essential Commands (Copy-Paste Ready)
+```bash
+# Setup and dependencies
+poetry install                                    # ~5 seconds
+poetry run pytest -v                             # <1 second
+
+# Development server
+poetry run uvicorn main:app --reload --host 127.0.0.1 --port 8000
+
+# Testing and validation
+curl http://127.0.0.1:8000/                      # Test root endpoint
+poetry run pytest                                # Run all tests
+```
+
+### Timing Expectations
+- **Poetry install**: ~5 seconds - NEVER CANCEL
+- **Test suite**: <1 second for all 14 tests - NEVER CANCEL
+- **Server startup**: ~1 second
+- **Docker build**: 4-5 minutes (may fail due to network restrictions) - NEVER CANCEL
+
+All validated commands work reliably and should be used exactly as documented.
