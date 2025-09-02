@@ -60,6 +60,21 @@ async def cal_data(name: str, timezone: str = None, days: int = None):
 async def iframe(request: Request, name: str, timezone: str = None, days: int = None, locale: str = None,
                  width: int = None, colour: Literal["white", "black"] = None, 
                  color_scheme: Literal["normal", "light", "dark", "light dark", "dark light"] = None):
+    """
+    Generate an HTML iframe view of calendar events.
+    
+    Args:
+        name: Calendar name from config.ini or direct .ics URL
+        timezone: Override timezone for event display
+        days: Number of days to show from now
+        locale: Locale for date/time formatting
+        width: Width of the iframe in pixels
+        colour: DEPRECATED - Use color_scheme instead. Forces light ("white") or dark ("black") theme
+        color_scheme: CSS color-scheme value - "light", "dark", "normal", "light dark", or "dark light"
+    
+    Returns:
+        HTML response with calendar events in iframe format
+    """
     try:
         data = await cal_data(name, timezone, days)
     except HTTPException as e:
