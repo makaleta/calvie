@@ -1,9 +1,21 @@
 <!DOCTYPE html>
-<html lang="{{ lang }}">
+<html lang="{{ lang }}"{% if color_scheme %} style="color-scheme: {{ color_scheme }}"{% endif %}>
 <head>
     <meta charset="UTF-8">
     <title>Events</title>
     <style>
+        :root {
+            {% if color_scheme %}
+            color-scheme: {{ color_scheme }};
+            {% elif force_scheme == "white" %}
+            color-scheme: light only;
+            {% elif force_scheme == "black" %}
+            color-scheme: dark only;
+            {% else %}
+            color-scheme: light dark;
+            {% endif %}
+        }
+        
         .event-list {
             list-style-type: none;
             padding: 0;
@@ -33,20 +45,35 @@
             font-size: 12px;
             font-stretch: condensed;
         }
-        {%- if force_scheme != "white" %}
-        {%- if force_scheme != "black" %}
+        
+        /* Dark mode styles using color-scheme approach */
+        {% if color_scheme == "dark" or (color_scheme and "dark" in color_scheme) %}
+        body {
+            background-color: #111;
+        }
+        .event-time {
+            color: ghostwhite;
+        }
+        {% elif force_scheme == "black" %}
+        body {
+            background-color: #111;
+        }
+        .event-time {
+            color: ghostwhite;
+        }
+        {% elif color_scheme == "light" or force_scheme == "white" %}
+        /* Light mode - use defaults */
+        {% else %}
+        /* Auto mode - use media query */
         @media (prefers-color-scheme: dark) {
-        {%- endif %}
             body {
                 background-color: #111;
             }
             .event-time {
                 color: ghostwhite;
             }
-        {%- if force_scheme != "black" %}
         }
-        {%- endif %}
-        {%- endif %}
+        {% endif %}
     </style>
 </head>
 <body>
