@@ -64,6 +64,19 @@ You can also run the application using Docker:
     docker run -p 8080:8080 calvie
     ```
 
+## Testing
+
+The project includes comprehensive unit tests. To run the tests:
+
+```sh
+poetry run pytest
+```
+
+Or with verbose output:
+```sh
+poetry run pytest -v
+```
+
 ## License
 
 This project is licensed under the MIT License.
