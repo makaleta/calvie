@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "calvie"
-version = "0.1.4"
+version = "0.1.5"
 description = "Simple ical viewer"
 authors = ["Marek Kaleta <mk@m1k.cz>"]
 readme = "README.md"
