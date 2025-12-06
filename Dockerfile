@@ -1,4 +1,4 @@
-FROM python:3.12-alpine AS python
+FROM python:3.13-alpine AS python
 ENV PYTHONUNBUFFERED=true \
     PYTHONFAULTHANDLER=true \
     DEBIAN_FRONTEND=noninteractive
