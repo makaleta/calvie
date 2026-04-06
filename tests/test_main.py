@@ -161,6 +161,81 @@ class TestIframeEndpoint:
         
         assert response.status_code == 404
         assert "text/html" in response.headers["content-type"]  # Error template should be HTML
+    
+    @patch('main.cal_data')
+    def test_iframe_with_color_scheme_light(self, mock_cal_data, test_client):
+        """Test iframe with new color_scheme=light parameter."""
+        mock_cal_data.return_value = []
+        
+        response = test_client.get("/iframe/test_cal?color_scheme=light")
+        
+        assert response.status_code == 200
+        assert "color-scheme: light" in response.text
+    
+    @patch('main.cal_data')
+    def test_iframe_with_color_scheme_dark(self, mock_cal_data, test_client):
+        """Test iframe with new color_scheme=dark parameter."""
+        mock_cal_data.return_value = []
+        
+        response = test_client.get("/iframe/test_cal?color_scheme=dark")
+        
+        assert response.status_code == 200
+        assert "color-scheme: dark" in response.text
+        assert "background-color: #111" in response.text
+        assert "color: ghostwhite" in response.text
+    
+    @patch('main.cal_data')
+    def test_iframe_with_color_scheme_light_dark(self, mock_cal_data, test_client):
+        """Test iframe with new color_scheme=light dark parameter."""
+        mock_cal_data.return_value = []
+        
+        response = test_client.get("/iframe/test_cal?color_scheme=light%20dark")
+        
+        assert response.status_code == 200
+        assert "color-scheme: light dark" in response.text
+    
+    @patch('main.cal_data')
+    def test_iframe_with_color_scheme_normal(self, mock_cal_data, test_client):
+        """Test iframe with new color_scheme=normal parameter."""
+        mock_cal_data.return_value = []
+        
+        response = test_client.get("/iframe/test_cal?color_scheme=normal")
+        
+        assert response.status_code == 200
+        assert "color-scheme: normal" in response.text
+        assert "@media (prefers-color-scheme: dark)" in response.text
+    
+    @patch('main.cal_data')
+    def test_iframe_color_scheme_priority_over_colour(self, mock_cal_data, test_client):
+        """Test that color_scheme parameter takes priority over deprecated colour parameter."""
+        mock_cal_data.return_value = []
+        
+        # Both parameters provided - color_scheme should take priority
+        response = test_client.get("/iframe/test_cal?colour=black&color_scheme=light")
+        
+        assert response.status_code == 200
+        assert "color-scheme: light" in response.text
+        # Should not have dark styles since color_scheme=light overrides colour=black
+        assert "background-color: #111" not in response.text
+    
+    @patch('main.cal_data')
+    def test_iframe_colour_backward_compatibility(self, mock_cal_data, test_client):
+        """Test that deprecated colour parameter still works when color_scheme is not provided."""
+        mock_cal_data.return_value = []
+        
+        # Test colour=black still works
+        response = test_client.get("/iframe/test_cal?colour=black")
+        
+        assert response.status_code == 200
+        assert "color-scheme: dark only" in response.text
+        assert "background-color: #111" in response.text
+        
+        # Test colour=white still works
+        response = test_client.get("/iframe/test_cal?colour=white")
+        
+        assert response.status_code == 200
+        assert "color-scheme: light only" in response.text
+        assert "background-color: #111" not in response.text
 
 
 class TestConfiguration:
