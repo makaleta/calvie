@@ -4,6 +4,18 @@
     <meta charset="UTF-8">
     <title>Events</title>
     <style>
+        :root {
+            {% if color_scheme %}
+            color-scheme: {{ color_scheme }};
+            {% elif force_scheme == "white" %}
+            color-scheme: light only;
+            {% elif force_scheme == "black" %}
+            color-scheme: dark only;
+            {% else %}
+            color-scheme: light dark;
+            {% endif %}
+        }
+
         .event-list {
             list-style-type: none;
             padding: 0;
@@ -33,7 +45,8 @@
             font-size: 12px;
             font-stretch: condensed;
         }
-        {%- if force_scheme != "white" %}
+
+        {%- if force_scheme != "white" and color_scheme != "normal" %}
         {%- if force_scheme != "black" %}
         @media (prefers-color-scheme: dark) {
         {%- endif %}
