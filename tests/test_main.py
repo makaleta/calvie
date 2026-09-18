@@ -108,7 +108,7 @@ class TestCalDataEndpoint:
             mock_events.assert_called_once()
             # Verify that the timezone and days parameters were processed
             call_args = mock_events.call_args
-            assert call_args[1]['tzinfo'].zone == 'Europe/London'
+            assert call_args[1]['end'].tzinfo.zone == 'Europe/London'
     
     @patch('main.events')
     def test_cal_data_events_exception(self, mock_events, test_client):

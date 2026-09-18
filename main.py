@@ -1,7 +1,7 @@
 import configparser
 import os
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 from typing import Literal
 
 import pytz
@@ -50,7 +50,20 @@ async def cal_data(name: str, timezone: str = None, days: int = None):
     tz = pytz.timezone(timezone or config["timezone"])
     end = datetime.now(tz=tz) + timedelta(days=days or int(config["days to future"]))
     try:
-        ev = events(url, tzinfo=tz, end=end)
+        # Preserve calendar dates before applying the requested display timezone.
+        # The parser otherwise converts all-day midnights as absolute instants.
+        ev = events(url, end=end)
+        for event in ev:
+            if event.all_day:
+                start_date = event.start.date()
+                end_date = event.end.date()
+                if end_date == start_date:
+                    # A DATE without DTEND or DURATION lasts one calendar day.
+                    end_date += timedelta(days=1)
+                event.start = tz.localize(datetime.combine(start_date, time.min))
+                event.end = tz.localize(datetime.combine(end_date, time.min))
+            else:
+                event.astimezone(tz)
     except Exception as e:
         raise HTTPException(400, detail=str(e))
     return ev
@@ -113,10 +126,10 @@ async def iframe(request: Request, name: str, timezone: str = None, days: int = 
         time_str = str(get_time_format("short", locale=locale))
         datetime_str = str(get_datetime_format("long", locale=locale)).format(time_str, date_str)
         if event.all_day:
-            end_datetime = event.end - timedelta(seconds=1)
+            end_date = event.end.date() - timedelta(days=1)
             start = format_date(event.start.date(), date_str, locale=locale)
-            end = format_date(end_datetime.date(), date_str, locale=locale)
-            if event.start.date() == end_datetime.date():
+            end = format_date(end_date, date_str, locale=locale)
+            if event.start.date() == end_date:
                 return start
             else:
                 return f"{start} - {end}"

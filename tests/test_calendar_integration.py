@@ -45,10 +45,9 @@ def calendar_client(monkeypatch, isolated_config):
     isolated_config['test'] = {'url': 'https://example.com/test.ics'}
     monkeypatch.setattr(main, 'datetime', FixedDatetime)
     monkeypatch.setattr('icalevents.icalparser.now', lambda: FixedDatetime.now(pytz.UTC))
-    with patch('icalevents.icalevents.ICalDownload.data_from_url', return_value=CALENDAR) as download:
+    with patch('icalevents.icalevents.ICalDownload.data_from_url', return_value=CALENDAR):
         with TestClient(main.app) as client:
             yield client
-        assert download.called
 
 
 @pytest.mark.parametrize('name', ['test', 'https://example.com/direct.ics'])
@@ -81,8 +80,40 @@ def test_days_limits_real_parser_window(calendar_client):
     assert {event['summary'] for event in response.json()} == {'Day off', 'Meeting <team>'}
 
 
-@pytest.mark.xfail(strict=True, reason='Existing bug: all-day dates shift when converted from UTC to Europe/Prague')
-def test_all_day_calendar_date_in_non_utc_timezone(calendar_client):
-    response = calendar_client.get('/iframe/test', params={'timezone': 'Europe/Prague', 'locale': 'en_GB'})
+@pytest.mark.parametrize('timezone', ['UTC', 'Europe/Prague', 'America/New_York', 'Pacific/Kiritimati'])
+def test_all_day_calendar_date_in_non_utc_timezone(calendar_client, timezone):
+    response = calendar_client.get('/iframe/test', params={'timezone': timezone, 'locale': 'en_GB'})
     assert response.status_code == 200
-    assert 'Sun 4 Jan</li>' in response.text
+    assert '<li class="event-time">Sun 4 Jan</li>' in response.text
+
+
+@pytest.mark.parametrize('calendar_timezone', ['', 'X-WR-TIMEZONE:Europe/Prague\n', 'X-WR-TIMEZONE:America/New_York\n'])
+@pytest.mark.parametrize('timezone', ['Europe/Prague', 'America/New_York'])
+@pytest.mark.parametrize('end_property,expected', [
+    ('DTEND;VALUE=DATE:20260330', ['Sun 29 Mar']),
+    ('DTEND;VALUE=DATE:20260331', ['Sun 29 Mar - Mon 30 Mar']),
+    ('DURATION:P2D', ['Sun 29 Mar - Mon 30 Mar']),
+    ('', ['Sun 29 Mar']),
+    ('DTEND;VALUE=DATE:20260330\nRRULE:FREQ=DAILY;COUNT=2', ['Sun 29 Mar', 'Mon 30 Mar']),
+])
+def test_all_day_ranges_across_dst(calendar_client, calendar_timezone, timezone, end_property, expected):
+    calendar = ('BEGIN:VCALENDAR\nVERSION:2.0\nPRODID:-//Calvie//Test//EN\n'
+                + calendar_timezone + 'BEGIN:VEVENT\nUID:day\nDTSTART;VALUE=DATE:20260329\n'
+                + end_property + '\nSUMMARY:Holiday\nEND:VEVENT\nEND:VCALENDAR\n')
+    with patch('icalevents.icalevents.ICalDownload.data_from_url', return_value=calendar):
+        params = {'timezone': timezone, 'locale': 'en_GB', 'days': 100}
+        response = calendar_client.get('/iframe/test', params=params)
+        assert response.status_code == 200
+        for interval in expected:
+            assert f'<li class="event-time">{interval}</li>' in response.text
+        data = calendar_client.get('/cal/test', params=params).json()
+    assert len(data) == len(expected)
+    for event in data:
+        start = datetime.fromisoformat(event['start'])
+        end = datetime.fromisoformat(event['end'])
+        assert start.hour == end.hour == 0
+        assert end.date() > start.date()
+        # Midnight on the DST transition has a different offset from the next day.
+        zone = pytz.timezone(timezone)
+        assert start.utcoffset() == zone.localize(start.replace(tzinfo=None)).utcoffset()
+        assert end.utcoffset() == zone.localize(end.replace(tzinfo=None)).utcoffset()
