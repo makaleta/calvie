@@ -1,6 +1,6 @@
 [project]
 name = "calvie"
-version = "0.1.8"
+version = "0.1.9"
 description = "Simple ical viewer"
 authors = [{name = "Marek Kaleta", email = "mk@m1k.cz"}]
 readme = "README.md"
