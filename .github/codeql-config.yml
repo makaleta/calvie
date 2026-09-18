@@ -8,7 +8,7 @@ queries:
 paths-ignore:
   - "tests/**"
   - "**/*.md"
-  - "**/poetry.lock"
+  - "**/uv.lock"
 
 paths:
   - "main.py"

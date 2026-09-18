@@ -1,29 +1,21 @@
-FROM python:3.13-alpine AS python
-ENV PYTHONUNBUFFERED=true \
-    PYTHONFAULTHANDLER=true \
-    DEBIAN_FRONTEND=noninteractive
+FROM python:3.14-alpine AS python
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONFAULTHANDLER=1
 WORKDIR /app
 
-FROM python AS poetry
-ENV POETRY_HOME=/opt/poetry \
-    POETRY_VIRTUALENVS_IN_PROJECT=true
-ENV PATH="$POETRY_HOME/bin:$PATH"
-SHELL ["/bin/ash", "-o", "pipefail", "-c"]
-# hadolint ignore=DL3018
-RUN python -c 'from urllib.request import urlopen; print(urlopen("https://install.python-poetry.org").read().decode())' | python -
-COPY poetry.lock pyproject.toml /app/
-RUN poetry install --no-interaction --no-ansi -v
+FROM python AS builder
+COPY --from=ghcr.io/astral-sh/uv:0.12.17 /uv /usr/local/bin/uv
+ENV UV_PYTHON_DOWNLOADS=never \
+    UV_LINK_MODE=copy
+COPY pyproject.toml uv.lock ./
+RUN --mount=type=cache,target=/root/.cache/uv uv sync --locked --no-dev
 
 FROM python AS runtime
 ARG APP_VERSION=DEVEL
-ENV APP_VERSION=${APP_VERSION}
-ENV PATH="/app/.venv/bin:$PATH"
-ENV PYTHONPATH=$PYTHONPATH:"/app"
-COPY --from=poetry /app /app
-
-# Creating folders, and files for a project:
+ENV VERSION=${APP_VERSION} \
+    PATH="/app/.venv/bin:$PATH"
+COPY --from=builder /app/.venv /app/.venv
 COPY templates ./templates
-COPY main.py main.py
-
-
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080", "--proxy-headers", "--forwarded-allow-ips='*'"]
+COPY main.py ./
+EXPOSE 8080
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080", "--proxy-headers", "--forwarded-allow-ips=*"]

@@ -21,7 +21,7 @@ jobs:
       name: set variables
       shell: bash
       run: |
-        version=`grep -m 1 version pyproject.toml | tr -s ' ' | tr -d '"' | tr -d "'" | cut -d' ' -f3`
+        version=$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
         echo "version=$version" >> $GITHUB_ENV
         image_name=mkal/calvie
         echo "image_name=$image_name" >> $GITHUB_ENV  

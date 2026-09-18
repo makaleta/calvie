@@ -6,8 +6,8 @@ This repository contains Calvie, a small FastAPI application that fetches `.ics`
 
 ## Stack
 
-- Python 3.13+ (below 4.0); CI and Docker use Python 3.13
-- Poetry for dependency management
+- Python 3.14+ (below 4.0); CI and Docker use Python 3.14
+- uv for dependency management
 - FastAPI + Starlette
 - Jinja2 templates
 - Babel for locale-aware formatting
@@ -20,8 +20,9 @@ This repository contains Calvie, a small FastAPI application that fetches `.ics`
 - `templates/iframe.html`: iframe event rendering
 - `templates/error.html`: error rendering
 - `pyproject.toml`: project metadata and dependencies
-- `poetry.lock`: locked dependency versions
+- `uv.lock`: locked dependency versions
 - `tests/test_main.py`: route, URL validation, configuration, and localization tests
+- `tests/test_calendar_integration.py`: real parser, JSON serialization, and HTML regression tests
 - `tests/test_color_scheme.py`: iframe theme regression tests
 - `.github/workflows/`: test, Docker publishing, and CodeQL workflows
 - `README.md`: setup and usage notes
@@ -32,7 +33,7 @@ Run commands from the repository root; configuration and template paths are rela
 
 1. Install dependencies, including the development test tools:
 
-   `poetry install`
+   `uv sync --locked`
 
 2. For named calendars, create `config.ini` in the repository root. Direct calendar URLs work without this file. Example:
 
@@ -49,7 +50,7 @@ Run commands from the repository root; configuration and template paths are rela
 
 3. Run the app:
 
-   `poetry run uvicorn main:app --reload`
+   `uv run --locked uvicorn main:app --reload`
 
 ## Runtime behavior
 
@@ -68,14 +69,14 @@ Run commands from the repository root; configuration and template paths are rela
 - Preserve backward compatibility for the existing routes unless explicitly asked to change them.
 - Treat `config.ini` as user-provided local configuration; do not commit secrets or environment-specific values.
 - Template changes should preserve the minimal embeddable iframe use case.
-- If changing dependencies, update both `pyproject.toml` and `poetry.lock` and keep additions justified by actual app needs.
+- If changing dependencies, update both `pyproject.toml` and `uv.lock` and keep additions justified by actual app needs.
 
 ## Validation
 
 For code changes, use the smallest relevant validation available:
 
-- Run focused tests with `poetry run pytest tests/test_main.py` or `poetry run pytest tests/test_color_scheme.py`; run the full suite with `poetry run pytest` before merging.
-- Use `poetry run uvicorn main:app --reload` for startup verification when runtime changes warrant it, with targeted manual checks of `/cal/...` and `/iframe/...`.
-- Unit tests mock calendar fetching and do not need external calendar access. Avoid creating or modifying local `config.ini` for tests: the default configuration test expects the built-in defaults.
+- Run focused tests with `uv run --locked pytest tests/test_main.py` or `uv run --locked pytest tests/test_color_scheme.py`; run the full suite with `uv run --locked pytest` before merging.
+- Use `uv run --locked uvicorn main:app --reload` for startup verification when runtime changes warrant it, with targeted manual checks of `/cal/...` and `/iframe/...`.
+- Tests isolate configuration from local `config.ini` and mock calendar downloading; integration tests use the real parser with fixed calendar data and time. No external calendar access is needed.
 
 Add focused regression tests for changed route behavior, timezone handling, locale formatting, `.ics` URL validation, and theme selection. For automatic themes, check that dark styles remain inside the preference media query and that explicit themes preserve legacy parameter compatibility.

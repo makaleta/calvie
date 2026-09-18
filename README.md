@@ -9,7 +9,7 @@
 
 ## Requirements
 
-- Python 3.12+
+- Python 3.14+
 - FastAPI
 - Uvicorn
 - icalevents
@@ -24,11 +24,11 @@
     cd calvie
     ```
 
-2. Install dependencies using Poetry:
+2. Install dependencies using [uv](https://docs.astral.sh/uv/getting-started/installation/):
     ```sh
-    poetry install
+    uv sync --locked
     ```
-3. Configure using 'config.ini' file.
+3. For named calendars, create `config.ini` in the repository root. Direct calendar URLs work without it.
 Example contents:
 ```aiignore
 [DEFAULT]
@@ -45,7 +45,7 @@ url = https://example.com/calendar.ics
 
 1. Run the FastAPI application:
     ```sh
-    poetry run uvicorn main:app --reload
+    uv run --locked uvicorn main:app --reload
     ```
 
 2. Open your browser and navigate to `http://127.0.0.1:8000`.
@@ -72,9 +72,9 @@ You can also run the application using Docker:
     docker build -t calvie .
     ```
 
-2. Run the Docker container:
+2. Run the Docker container with your calendar configuration:
     ```sh
-    docker run -p 8080:8080 calvie
+    docker run --rm -p 8080:8080 -v "$PWD/config.ini:/app/config.ini:ro" calvie
     ```
 
 ## Testing
@@ -82,13 +82,17 @@ You can also run the application using Docker:
 The project includes comprehensive unit tests. To run the tests:
 
 ```sh
-poetry run pytest
+uv run --locked pytest
 ```
 
 Or with verbose output:
 ```sh
-poetry run pytest -v
+uv run --locked pytest -v
 ```
+
+Dependencies are locked in `uv.lock`. After changing dependencies, run `uv lock`
+and commit both `pyproject.toml` and `uv.lock`. To update locked versions within
+the declared ranges, run `uv lock --upgrade` and rerun the tests.
 
 ## License
 
