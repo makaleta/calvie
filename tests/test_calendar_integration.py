@@ -79,3 +79,10 @@ def test_days_limits_real_parser_window(calendar_client):
     response = calendar_client.get('/cal/test', params={'days': 5})
     assert response.status_code == 200
     assert {event['summary'] for event in response.json()} == {'Day off', 'Meeting <team>'}
+
+
+@pytest.mark.xfail(strict=True, reason='Existing bug: all-day dates shift when converted from UTC to Europe/Prague')
+def test_all_day_calendar_date_in_non_utc_timezone(calendar_client):
+    response = calendar_client.get('/iframe/test', params={'timezone': 'Europe/Prague', 'locale': 'en_GB'})
+    assert response.status_code == 200
+    assert 'Sun 4 Jan</li>' in response.text
