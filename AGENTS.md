@@ -80,3 +80,5 @@ For code changes, use the smallest relevant validation available:
 - Tests isolate configuration from local `config.ini` and mock calendar downloading; integration tests use the real parser with fixed calendar data and time. No external calendar access is needed.
 
 Add focused regression tests for changed route behavior, timezone handling, locale formatting, `.ics` URL validation, and theme selection. For automatic themes, check that dark styles remain inside the preference media query and that explicit themes preserve legacy parameter compatibility.
+
+After changing the application version in `pyproject.toml`, run `uv lock` and commit the updated `uv.lock` too. CI uses `--locked` and rejects stale project metadata even when dependency versions are unchanged.

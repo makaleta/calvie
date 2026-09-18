@@ -90,7 +90,7 @@ Or with verbose output:
 uv run --locked pytest -v
 ```
 
-Dependencies are locked in `uv.lock`. After changing dependencies, run `uv lock`
+Dependencies are locked in `uv.lock`. After changing dependencies or the application version, run `uv lock`
 and commit both `pyproject.toml` and `uv.lock`. To update locked versions within
 the declared ranges, run `uv lock --upgrade` and rerun the tests.
 
