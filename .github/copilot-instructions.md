@@ -12,3 +12,4 @@ Read `AGENTS.md` for repository layout, runtime behavior, and change guidance.
 - Docker uses Python 3.14 Alpine and production dependencies only; build with `docker build -t calvie .`.
 - Preserve existing routes, localized iframe output, and legacy `colour` compatibility.
 - Keep calendar downloads behind `calendar_source.py`; never let the parser fetch an unchecked URL. Private-network access is a per-calendar opt-in scoped to the original origin. Preserve DNS pinning, redirect checks, TLS verification, and generic errors.
+- Calendar work must use the shared bounded worker admission path; cancellation must not release capacity while a job is running. Preserve global resource limits, bounded streaming/decompression, and the shared download budget. Hard parser isolation remains a separate pending change.

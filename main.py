@@ -1,9 +1,12 @@
 import configparser
+import asyncio
+from dataclasses import dataclass
 import os
 from datetime import datetime, time, timedelta
 from typing import Literal
 
 import pytz
+import anyio
 from babel.dates import format_datetime, format_date, format_time, get_datetime_format, get_date_format, get_time_format
 from fastapi import FastAPI, HTTPException
 from fastapi.templating import Jinja2Templates
@@ -11,14 +14,46 @@ from icalevents.icalevents import events
 from starlette import status
 from starlette.requests import Request
 from starlette.responses import HTMLResponse
+from urllib3.exceptions import TimeoutError as HTTPTimeoutError
 
-from calendar_source import download_calendar, is_ics_url
+from calendar_source import CalendarDownloadTimeout, download_calendar, is_ics_url
 
 CONFIG = configparser.ConfigParser(interpolation=configparser.ExtendedInterpolation())
 CONFIG["DEFAULT"] = {"timezone": "UTC", "days to future": 40, "locale": "en_GB", "width": 300}
+CONFIG["DEFAULT"].update({"max calendar bytes": "5242880", "max days": "366", "max events": "5000",
+                        "download timeout": "60", "max concurrent calendars": "4"})
 CONFIG.read('config.ini')
 if "allow private network" in CONFIG.defaults():
     raise ValueError("allow private network must be set on an individual calendar, not DEFAULT")
+
+
+@dataclass(frozen=True)
+class ResourceLimits:
+    max_calendar_bytes: int
+    max_days: int
+    max_events: int
+    download_timeout: int
+    max_concurrent_calendars: int
+
+    @classmethod
+    def from_config(cls):
+        values = {}
+        for field in cls.__dataclass_fields__:
+            option = field.replace("_", " ")
+            try:
+                value = CONFIG["DEFAULT"].getint(option)
+                if value <= 0:
+                    raise ValueError
+            except (TypeError, ValueError):
+                raise ValueError(f"{option} must be a positive integer in DEFAULT") from None
+            values[field] = value
+        return cls(**values)
+
+
+LIMITS = ResourceLimits.from_config()
+calendar_slots = anyio.CapacityLimiter(LIMITS.max_concurrent_calendars)
+calendar_threads = anyio.CapacityLimiter(LIMITS.max_concurrent_calendars)
+calendar_jobs = set()
 
 app = FastAPI(version=os.getenv('VERSION', 'DEVEL'), name="CalVie", description="Simple iCal viewer", )
 templates = Jinja2Templates(directory="templates")
@@ -27,6 +62,43 @@ templates = Jinja2Templates(directory="templates")
 @app.get("/", status_code=status.HTTP_418_IM_A_TEAPOT)
 async def root():
     return {"status": "I am a teapot at default"}
+
+
+def _load_calendar(url, allow_private_network, end, tz):
+    content = download_calendar(url, allow_private_network=allow_private_network,
+                                max_bytes=LIMITS.max_calendar_bytes, timeout=LIMITS.download_timeout)
+    ev = events(string_content=content, end=end)
+    if len(ev) > LIMITS.max_events:
+        raise ValueError("Too many calendar events")
+    # Preserve calendar dates before applying the requested display timezone.
+    for event in ev:
+        if event.all_day:
+            start_date = event.start.date()
+            end_date = event.end.date()
+            if end_date == start_date:
+                end_date += timedelta(days=1)
+            event.start = tz.localize(datetime.combine(start_date, time.min))
+            event.end = tz.localize(datetime.combine(end_date, time.min))
+        else:
+            event.astimezone(tz)
+    return ev
+
+
+async def _run_calendar_job(borrower, slots, url, allow_private_network, end, tz):
+    try:
+        return await anyio.to_thread.run_sync(
+            _load_calendar, url, allow_private_network, end, tz,
+            abandon_on_cancel=False, limiter=calendar_threads,
+        )
+    finally:
+        slots.release_on_behalf_of(borrower)
+
+
+def _calendar_job_finished(job):
+    calendar_jobs.discard(job)
+    if not job.cancelled():
+        # Also consume failures when the requesting client has disconnected.
+        job.exception()
 
 
 @app.get("/cal/{name:path}")
@@ -40,26 +112,36 @@ async def cal_data(name: str, timezone: str = None, days: int = None):
             raise HTTPException(404, detail="Invalid calendar name")
         url = name
         config = CONFIG["DEFAULT"]
-    tz = pytz.timezone(timezone or config["timezone"])
-    end = datetime.now(tz=tz) + timedelta(days=days or int(config["days to future"]))
+    try:
+        effective_days = days if days is not None else config.getint("days to future")
+        if not 1 <= effective_days <= LIMITS.max_days:
+            raise ValueError
+        tz = pytz.timezone(timezone or config["timezone"])
+        end = datetime.now(tz=tz) + timedelta(days=effective_days)
+    except (ValueError, TypeError, OverflowError, pytz.UnknownTimeZoneError):
+        raise HTTPException(422, detail="Invalid calendar range") from None
     try:
         if config.name != "DEFAULT":
             allow_private_network = config.getboolean("allow private network", fallback=False)
-        content = download_calendar(url, allow_private_network=allow_private_network)
-        # Preserve calendar dates before applying the requested display timezone.
-        # The parser otherwise converts all-day midnights as absolute instants.
-        ev = events(string_content=content, end=end)
-        for event in ev:
-            if event.all_day:
-                start_date = event.start.date()
-                end_date = event.end.date()
-                if end_date == start_date:
-                    # A DATE without DTEND or DURATION lasts one calendar day.
-                    end_date += timedelta(days=1)
-                event.start = tz.localize(datetime.combine(start_date, time.min))
-                event.end = tz.localize(datetime.combine(end_date, time.min))
-            else:
-                event.astimezone(tz)
+    except ValueError:
+        raise HTTPException(400, detail="Unable to load calendar") from None
+    borrower = object()
+    slots = calendar_slots
+    try:
+        slots.acquire_on_behalf_of_nowait(borrower)
+    except anyio.WouldBlock:
+        raise HTTPException(503, detail="Calendar service is busy", headers={"Retry-After": "1"}) from None
+    try:
+        job = asyncio.create_task(_run_calendar_job(borrower, slots, url, allow_private_network, end, tz))
+    except BaseException:
+        slots.release_on_behalf_of(borrower)
+        raise
+    calendar_jobs.add(job)
+    job.add_done_callback(_calendar_job_finished)
+    try:
+        ev = await asyncio.shield(job)
+    except (CalendarDownloadTimeout, HTTPTimeoutError):
+        raise HTTPException(504, detail="Calendar download timed out") from None
     except Exception:
         raise HTTPException(400, detail="Unable to load calendar") from None
     return ev
@@ -89,7 +171,7 @@ async def iframe(request: Request, name: str, timezone: str = None, days: int = 
     except HTTPException as e:
         return templates.TemplateResponse(request=request, name="error.html",
                                           context={"detail": str(e), "status_code": e.status_code},
-                                          status_code=e.status_code)
+                                          status_code=e.status_code, headers=e.headers)
     # sieve and localize data
     try:
         config = CONFIG[name]

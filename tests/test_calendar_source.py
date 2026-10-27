@@ -1,6 +1,7 @@
 """Exercise the network boundary with deterministic DNS and HTTP responses."""
 
 import configparser
+import io
 import runpy
 import socket
 import ssl
@@ -24,7 +25,8 @@ def dns_answer(address):
 
 def response(status=200, headers=None, body=b"calendar"):
     result = Mock(status=status, headers=headers or {})
-    result.read.return_value = body
+    stream = io.BytesIO(body)
+    result.read1.side_effect = lambda amount, **_kwargs: stream.read(amount)
     return result
 
 
@@ -238,11 +240,11 @@ def test_connections_closed_on_failure(network, failure):
     if failure == "request":
         pool.urlopen.side_effect = urllib3.exceptions.SSLError("test certificate failure")
     elif failure == "read":
-        result.read.side_effect = urllib3.exceptions.ReadTimeoutError(None, "/", "timeout")
+        result.read1.side_effect = urllib3.exceptions.ReadTimeoutError(None, "/", "timeout")
     elif failure == "decode":
-        result.read.return_value = b"\xff"
+        result.read1.side_effect = [b"\xff", b""]
     elif failure == "empty":
-        result.read.return_value = b""
+        result.read1.side_effect = [b""]
     else:
         result.status = 500
     with pytest.raises(Exception):
@@ -272,10 +274,12 @@ def test_private_option_only_for_named_calendar():
     with patch("main.download_calendar", return_value="calendar") as download, patch("main.events", return_value=[]):
         client = TestClient(main.app)
         assert client.get("/cal/internal").status_code == 200
-        download.assert_called_with("http://127.0.0.1/calendar", allow_private_network=True)
+        download.assert_called_with("http://127.0.0.1/calendar", allow_private_network=True,
+                                    max_bytes=5242880, timeout=60)
         download.side_effect = source.CalendarSourceError("blocked")
         assert client.get("/cal/http://127.0.0.1/calendar.ics?allow_private_network=true").status_code == 400
-        download.assert_called_with("http://127.0.0.1/calendar.ics", allow_private_network=False)
+        download.assert_called_with("http://127.0.0.1/calendar.ics", allow_private_network=False,
+                                    max_bytes=5242880, timeout=60)
 
 
 @pytest.mark.parametrize("route", ["cal", "iframe"])

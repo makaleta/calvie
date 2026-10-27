@@ -90,9 +90,50 @@ are rejected. Each connection uses a validated IP while preserving the original
 HTTP host and HTTPS certificate verification. No environment proxy is used.
 
 Existing internal sources need this explicit opt-in after upgrading. Restart
-the application after changing configuration. Connection and read timeouts are
-5 and 10 seconds respectively; these are not a total download or parsing limit.
-Calendar failures return a generic HTTP 400 without exposing source URLs.
+the application after changing configuration. Calendar failures return generic
+errors without exposing source URLs.
+
+### Resource limits
+
+Calendar downloading, parsing, and timezone conversion run in worker threads.
+Both calendar routes share four loading slots per application worker. Once all
+slots are occupied, new calendar requests receive HTTP 503 and `Retry-After: 1`
+without queuing. Disconnecting a client does not free its slot until the work
+finishes. With multiple Uvicorn workers, each worker has its own slots.
+
+The following global limits can be changed only in `[DEFAULT]` in `config.ini`:
+
+```ini
+[DEFAULT]
+max calendar bytes = 5242880
+max days = 366
+max events = 5000
+download timeout = 60
+max concurrent calendars = 4
+```
+
+Every limit must be a positive integer; invalid settings prevent startup.
+Per-calendar sections and HTTP parameters cannot override these global limits.
+The `days` parameter and configured `days to future` must be between 1 and
+`max days`; invalid ranges return HTTP 422 before downloading. The default
+window remains 40 days. Results over `max events` are rejected, never truncated.
+
+Downloads are read in blocks of at most 64 KiB. Both transferred bytes and
+decompressed bytes must fit `max calendar bytes` (5 MiB by default), regardless
+of `Content-Length`. Uncompressed, gzip (including concatenated members), and
+deflate responses are supported; other or stacked content encodings are rejected.
+Size and event-count failures return HTTP 400, and download timeouts return
+HTTP 504. The iframe renders these errors with the same status and retry header.
+
+The download budget covers all redirects and body reads and is checked between
+operations. Connection/read timeouts remain at most 5/10 seconds, shortened when
+the remaining budget is smaller. The budget cannot forcibly interrupt DNS or
+an internally blocked operation, so it is not a strict wall-clock deadline.
+
+**Parser isolation is still pending.** Event counts are checked after parsing.
+Malicious recurrence expansion can still consume CPU and memory, and a running
+parser thread cannot be forcibly stopped. This step does not provide hard parser
+time or memory limits, or a separate byte limit on serialized responses.
 
 ## Docker
 

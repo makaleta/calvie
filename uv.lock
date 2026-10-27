@@ -47,6 +47,7 @@ name = "calvie"
 version = "0.1.9"
 source = { virtual = "." }
 dependencies = [
+    { name = "anyio" },
     { name = "babel" },
     { name = "fastapi" },
     { name = "icalevents" },
@@ -66,6 +67,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "anyio", specifier = ">=4.15.1,<5" },
     { name = "babel", specifier = ">=2.18.0,<3" },
     { name = "fastapi", specifier = ">=0.141.1,<0.142" },
     { name = "icalevents", specifier = ">=0.3.1,<0.4" },

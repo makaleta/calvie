@@ -5,13 +5,77 @@ from email.message import Message
 import ipaddress
 import re
 import socket
+import time
 from urllib.parse import quote, urljoin, urlsplit, urlunsplit
+import zlib
 
 import urllib3
 
 
 class CalendarSourceError(ValueError):
     """A calendar source is invalid, disallowed, or unavailable."""
+
+
+class CalendarDownloadTimeout(CalendarSourceError, TimeoutError):
+    """The shared download time budget has expired."""
+
+
+def _remaining_time(deadline: float) -> float:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise CalendarDownloadTimeout("Calendar download timed out")
+    return remaining
+
+
+def _read_body(response, max_bytes: int, deadline: float) -> bytes:
+    """Bound both wire bytes and decompressed output without an unbounded flush."""
+    length = response.headers.get("Content-Length")
+    if length is not None:
+        if not re.fullmatch(r"[0-9]+", length) or int(length) > max_bytes:
+            raise CalendarSourceError("Invalid or excessive calendar length")
+    encoding = response.headers.get("Content-Encoding", "").strip().lower()
+    if encoding not in {"", "identity", "gzip", "deflate"}:
+        raise CalendarSourceError("Unsupported calendar encoding")
+    compressed = encoding in {"gzip", "deflate"}
+    decoder = zlib.decompressobj(16 + zlib.MAX_WBITS) if encoding == "gzip" else None
+    header = b""
+    output = bytearray()
+    transferred = 0
+    while True:
+        _remaining_time(deadline)
+        chunk = response.read1(min(65536, max_bytes - transferred + 1), decode_content=False)
+        _remaining_time(deadline)
+        if not chunk:
+            break
+        transferred += len(chunk)
+        if transferred > max_bytes:
+            raise CalendarSourceError("Calendar is too large")
+        if not compressed:
+            output.extend(chunk)
+            continue
+        if decoder is None:
+            # HTTP deflate exists in both zlib-wrapped and raw forms.
+            header += chunk
+            if len(header) < 2:
+                continue
+            wrapped = header[0] & 15 == 8 and int.from_bytes(header[:2], "big") % 31 == 0
+            decoder = zlib.decompressobj(zlib.MAX_WBITS if wrapped else -zlib.MAX_WBITS)
+            chunk, header = header, b""
+        while chunk:
+            _remaining_time(deadline)
+            if decoder.eof:
+                if encoding != "gzip":
+                    raise CalendarSourceError("Unexpected data after compressed calendar")
+                decoder = zlib.decompressobj(16 + zlib.MAX_WBITS)
+            output.extend(decoder.decompress(chunk, max_bytes - len(output) + 1))
+            if len(output) > max_bytes:
+                raise CalendarSourceError("Calendar is too large")
+            chunk = decoder.unused_data if decoder.eof else decoder.unconsumed_tail
+    if compressed and (decoder is None or not decoder.eof):
+        raise CalendarSourceError("Incomplete compressed calendar")
+    if not output:
+        raise CalendarSourceError("Calendar source is empty")
+    return bytes(output)
 
 
 @dataclass(frozen=True)
@@ -111,13 +175,19 @@ def _resolve(source: CalendarURL, allow_private: bool) -> str:
     return str(addresses[0])
 
 
-def download_calendar(url: str, *, allow_private_network: bool = False) -> str:
+def download_calendar(url: str, *, allow_private_network: bool = False,
+                      max_bytes: int = 5242880, timeout: int = 60) -> str:
     """Validate each hop and pin its connection to an already checked IP address."""
+    if max_bytes < 1 or timeout <= 0:
+        raise ValueError("Download limits must be positive")
+    deadline = time.monotonic() + timeout
     source = normalize_url(url)
     private_origin = source.origin if allow_private_network else None
     for hop in range(6):
+        _remaining_time(deadline)
         address = _resolve(source, allow_private=source.origin == private_origin)
-        options = {"timeout": urllib3.Timeout(connect=5, read=10), "retries": False}
+        remaining = _remaining_time(deadline)
+        options = {"timeout": urllib3.Timeout(connect=min(5, remaining), read=min(10, remaining)), "retries": False}
         if source.scheme == "https":
             pool = urllib3.HTTPSConnectionPool(
                 address, source.port, server_hostname=source.host,
@@ -131,6 +201,7 @@ def download_calendar(url: str, *, allow_private_network: bool = False) -> str:
                 "GET", source.target, headers={"Host": source.authority},
                 redirect=False, retries=False, preload_content=False,
             )
+            _remaining_time(deadline)
             if response.status in {301, 302, 303, 307, 308}:
                 location = response.headers.get("Location")
                 if (not location or hop == 5 or "\\" in location or "#" in location
@@ -143,14 +214,14 @@ def download_calendar(url: str, *, allow_private_network: bool = False) -> str:
                 continue
             if not 200 <= response.status < 300:
                 raise CalendarSourceError("Calendar source is unavailable")
-            data = response.read()
-            if not data:
-                raise CalendarSourceError("Calendar source is empty")
+            data = _read_body(response, max_bytes, deadline)
             content_type = Message()
             content_type["Content-Type"] = response.headers.get("Content-Type", "")
             return data.decode(content_type.get_content_charset() or "utf-8").replace("\r", "")
         finally:
-            if response is not None:
-                response.close()
-            pool.close()
+            try:
+                if response is not None:
+                    response.close()
+            finally:
+                pool.close()
     raise CalendarSourceError("Too many calendar redirects")
