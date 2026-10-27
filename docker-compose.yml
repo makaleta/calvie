@@ -1,0 +1,18 @@
+services:
+  main:
+    image: "mkal/calvie:latest"
+    restart: unless-stopped
+    volumes:
+      - ./sockets:/sockets
+      - ./config.ini:/app/config.ini
+    command: uvicorn main:app --uds /sockets/main.sock --proxy-headers --forwarded-allow-ips='*'
+
+  backup:
+    profiles: ["upgrade"]
+    image: "mkal/calvie:latest"
+    restart: unless-stopped
+    volumes:
+      - ./sockets:/sockets
+      - ./config.ini:/app/config.ini
+    command: uvicorn main:app --uds /sockets/backup.sock --proxy-headers --forwarded-allow-ips='*'
+
