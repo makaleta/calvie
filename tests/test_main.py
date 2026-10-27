@@ -10,6 +10,12 @@ from fastapi.testclient import TestClient
 from main import app, is_ics_url, CONFIG
 
 
+@pytest.fixture(autouse=True)
+def mock_calendar_download():
+    with patch('main.download_calendar', return_value='mocked calendar'):
+        yield
+
+
 @pytest.fixture
 def test_client():
     """Fixture to provide test client."""
@@ -119,7 +125,7 @@ class TestCalDataEndpoint:
             response = test_client.get("/cal/test_cal")
             
             assert response.status_code == 400
-            assert "Calendar parsing error" in response.json()["detail"]
+            assert response.json()["detail"] == "Unable to load calendar"
 
 
 class TestIframeEndpoint:

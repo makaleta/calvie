@@ -11,3 +11,4 @@ Read `AGENTS.md` for repository layout, runtime behavior, and change guidance.
 - Verify runtime changes with focused tests and run the full suite before merging.
 - Docker uses Python 3.14 Alpine and production dependencies only; build with `docker build -t calvie .`.
 - Preserve existing routes, localized iframe output, and legacy `colour` compatibility.
+- Keep calendar downloads behind `calendar_source.py`; never let the parser fetch an unchecked URL. Private-network access is a per-calendar opt-in scoped to the original origin. Preserve DNS pinning, redirect checks, TLS verification, and generic errors.

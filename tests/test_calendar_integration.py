@@ -45,7 +45,7 @@ def calendar_client(monkeypatch, isolated_config):
     isolated_config['test'] = {'url': 'https://example.com/test.ics'}
     monkeypatch.setattr(main, 'datetime', FixedDatetime)
     monkeypatch.setattr('icalevents.icalparser.now', lambda: FixedDatetime.now(pytz.UTC))
-    with patch('icalevents.icalevents.ICalDownload.data_from_url', return_value=CALENDAR):
+    with patch('main.download_calendar', return_value=CALENDAR):
         with TestClient(main.app) as client:
             yield client
 
@@ -100,7 +100,7 @@ def test_all_day_ranges_across_dst(calendar_client, calendar_timezone, timezone,
     calendar = ('BEGIN:VCALENDAR\nVERSION:2.0\nPRODID:-//Calvie//Test//EN\n'
                 + calendar_timezone + 'BEGIN:VEVENT\nUID:day\nDTSTART;VALUE=DATE:20260329\n'
                 + end_property + '\nSUMMARY:Holiday\nEND:VEVENT\nEND:VCALENDAR\n')
-    with patch('icalevents.icalevents.ICalDownload.data_from_url', return_value=calendar):
+    with patch('main.download_calendar', return_value=calendar):
         params = {'timezone': timezone, 'locale': 'en_GB', 'days': 100}
         response = calendar_client.get('/iframe/test', params=params)
         assert response.status_code == 200

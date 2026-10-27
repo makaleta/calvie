@@ -1,6 +1,5 @@
 import configparser
 import os
-import re
 from datetime import datetime, time, timedelta
 from typing import Literal
 
@@ -13,9 +12,13 @@ from starlette import status
 from starlette.requests import Request
 from starlette.responses import HTMLResponse
 
+from calendar_source import download_calendar, is_ics_url
+
 CONFIG = configparser.ConfigParser(interpolation=configparser.ExtendedInterpolation())
 CONFIG["DEFAULT"] = {"timezone": "UTC", "days to future": 40, "locale": "en_GB", "width": 300}
 CONFIG.read('config.ini')
+if "allow private network" in CONFIG.defaults():
+    raise ValueError("allow private network must be set on an individual calendar, not DEFAULT")
 
 app = FastAPI(version=os.getenv('VERSION', 'DEVEL'), name="CalVie", description="Simple iCal viewer", )
 templates = Jinja2Templates(directory="templates")
@@ -26,19 +29,9 @@ async def root():
     return {"status": "I am a teapot at default"}
 
 
-def is_ics_url(name: str) -> bool:
-    """Check if the given string is a URL pointing to an .ics file."""
-    ics_url_pattern = re.compile(r'^(https?://)?'  # http:// or https:// (optional)
-                                 r'([a-zA-Z0-9.-]+)'  # domain name
-                                 r'(:[0-9]{1,5})?'  # port (optional)
-                                 r'(/.*)?'  # path (optional)
-                                 r'\.ics$'  # ends with .ics
-                                 )
-    return bool(ics_url_pattern.match(name))
-
-
 @app.get("/cal/{name:path}")
 async def cal_data(name: str, timezone: str = None, days: int = None):
+    allow_private_network = False
     try:
         config = CONFIG[name]
         url = config['url']
@@ -50,9 +43,12 @@ async def cal_data(name: str, timezone: str = None, days: int = None):
     tz = pytz.timezone(timezone or config["timezone"])
     end = datetime.now(tz=tz) + timedelta(days=days or int(config["days to future"]))
     try:
+        if config.name != "DEFAULT":
+            allow_private_network = config.getboolean("allow private network", fallback=False)
+        content = download_calendar(url, allow_private_network=allow_private_network)
         # Preserve calendar dates before applying the requested display timezone.
         # The parser otherwise converts all-day midnights as absolute instants.
-        ev = events(url, end=end)
+        ev = events(string_content=content, end=end)
         for event in ev:
             if event.all_day:
                 start_date = event.start.date()
@@ -64,8 +60,8 @@ async def cal_data(name: str, timezone: str = None, days: int = None):
                 event.end = tz.localize(datetime.combine(end_date, time.min))
             else:
                 event.astimezone(tz)
-    except Exception as e:
-        raise HTTPException(400, detail=str(e))
+    except Exception:
+        raise HTTPException(400, detail="Unable to load calendar") from None
     return ev
 
 

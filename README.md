@@ -63,6 +63,37 @@ Without a theme parameter, the iframe follows the browser's preference.
 The legacy `colour=white` and `colour=black` parameters remain supported;
 `color_scheme` takes precedence when both parameters are supplied.
 
+### Calendar source security
+
+Direct calendar URLs and configured sources use HTTP or HTTPS and must resolve
+only to public IP addresses. Nonstandard ports remain supported. URLs without
+a scheme use HTTP. Direct URLs must have a path ending in `.ics` (the legacy
+bare-host form `calendar.ics` also remains supported); query tokens are allowed.
+URL credentials, fragments, and ambiguous URL forms are rejected.
+When including a source query in a route, encode its `?` as `%3F`, for example
+`/cal/https://example.com/calendar.ics%3Ftoken=example-token`.
+
+For a trusted internal calendar, explicitly enable access in that calendar's
+section of your local `config.ini`:
+
+```ini
+[internalCalendar]
+url = http://calendar.internal:8080/feed
+allow private network = true
+```
+
+This option is forbidden in `[DEFAULT]` and cannot be enabled through request
+parameters. It permits private addresses only for the configured source's
+original scheme, hostname, and port. Redirects to another origin must resolve
+to public addresses. Up to five redirects are followed; HTTPS-to-HTTP redirects
+are rejected. Each connection uses a validated IP while preserving the original
+HTTP host and HTTPS certificate verification. No environment proxy is used.
+
+Existing internal sources need this explicit opt-in after upgrading. Restart
+the application after changing configuration. Connection and read timeouts are
+5 and 10 seconds respectively; these are not a total download or parsing limit.
+Calendar failures return a generic HTTP 400 without exposing source URLs.
+
 ## Docker
 
 You can also run the application using Docker:
