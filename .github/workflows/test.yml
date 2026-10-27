@@ -5,9 +5,9 @@ permissions:
 
 on:
   pull_request:
-    branches: [ "*" ]
   push:
     branches: [ "master", "develop" ]
+  workflow_call:
 
 jobs:
   test:

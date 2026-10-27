@@ -4,7 +4,6 @@ on:
   push:
     branches: [ "master", "develop" ]
   pull_request:
-    branches: [ "*" ]
   schedule:
     - cron: '34 15 * * 0'
 
@@ -26,20 +25,6 @@ jobs:
     steps:
     - name: Checkout repository
       uses: actions/checkout@v6
-
-    - name: Disable default CodeQL setup
-      env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-        CURRENT_STATE=$(gh api /repos/${{ github.repository }}/code-scanning/default-setup \
-          --jq '.state' 2>/dev/null || echo "unknown")
-        if [ "$CURRENT_STATE" = "configured" ]; then
-          echo "Disabling default CodeQL setup to allow advanced configuration..."
-          gh api --method PATCH /repos/${{ github.repository }}/code-scanning/default-setup \
-            -f state=not-configured
-        else
-          echo "Default CodeQL setup is not enabled (state: $CURRENT_STATE), skipping."
-        fi
 
     - name: Initialize CodeQL
       uses: github/codeql-action/init@v4
