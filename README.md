@@ -9,6 +9,7 @@
 
 ## Requirements
 
+- Linux (including Docker); other platforms are rejected at startup
 - Python 3.14+
 - FastAPI
 - Uvicorn
@@ -95,11 +96,14 @@ errors without exposing source URLs.
 
 ### Resource limits
 
-Calendar downloading, parsing, and timezone conversion run in worker threads.
+Calendar downloads run in worker threads. Parsing, timezone conversion, and
+JSON/HTML preparation run in a fresh Linux process for each request.
 Both calendar routes share four loading slots per application worker. Once all
 slots are occupied, new calendar requests receive HTTP 503 and `Retry-After: 1`
-without queuing. Disconnecting a client does not free its slot until the work
-finishes. With multiple Uvicorn workers, each worker has its own slots.
+without queuing. An interrupted download retains its slot until the thread
+finishes and does not then start a parser. An interrupted parser is killed and
+reaped before its slot is released. With multiple Uvicorn workers, each worker
+has its own slots.
 
 The following global limits can be changed only in `[DEFAULT]` in `config.ini`:
 
@@ -110,6 +114,9 @@ max days = 366
 max events = 5000
 download timeout = 60
 max concurrent calendars = 4
+parser timeout = 10
+parser memory mib = 256
+max response bytes = 20971520
 ```
 
 Every limit must be a positive integer; invalid settings prevent startup.
@@ -124,16 +131,26 @@ of `Content-Length`. Uncompressed, gzip (including concatenated members), and
 deflate responses are supported; other or stacked content encodings are rejected.
 Size and event-count failures return HTTP 400, and download timeouts return
 HTTP 504. The iframe renders these errors with the same status and retry header.
+Invalid timezone or locale also returns 422 before downloading.
 
 The download budget covers all redirects and body reads and is checked between
 operations. Connection/read timeouts remain at most 5/10 seconds, shortened when
 the remaining budget is smaller. The budget cannot forcibly interrupt DNS or
 an internally blocked operation, so it is not a strict wall-clock deadline.
 
-**Parser isolation is still pending.** Event counts are checked after parsing.
-Malicious recurrence expansion can still consume CPU and memory, and a running
-parser thread cannot be forcibly stopped. This step does not provide hard parser
-time or memory limits, or a separate byte limit on serialized responses.
+The processing timeout covers process startup, input transfer, parsing, and
+response preparation. A timed-out process is killed and reaped and returns 504.
+Before importing the parser, the child applies Linux `RLIMIT_AS` to cap its
+address space (256 MiB by default). This is not a reserved amount of physical
+memory or a container RSS limit. Four loading slots can run up to four such
+processes per application worker, in addition to the parent application's memory.
+
+Both the child and parent cap the final JSON or HTML response at 20 MiB by
+default. Responses are buffered until the process succeeds; partial, oversized,
+invalid, or memory-exhausted results return a generic 400 without truncation.
+Failure to start the worker returns a generic 500. Resource limits are not a
+sandbox against code execution. Linux support is required; there is no fallback
+which silently omits the memory limit.
 
 ## Docker
 

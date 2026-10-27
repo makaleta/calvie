@@ -13,4 +13,6 @@ paths-ignore:
 paths:
   - "main.py"
   - "calendar_source.py"
+  - "calendar_processing.py"
+  - "calendar_worker.py"
   - "templates/**"

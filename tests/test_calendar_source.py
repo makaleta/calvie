@@ -8,7 +8,7 @@ import ssl
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -259,9 +259,9 @@ def test_connections_closed_on_failure(network, failure):
 def test_errors_do_not_disclose_private_calendar_url(route, stage):
     main.CONFIG["private"] = {"url": "https://example.com/SECRET_TOKEN.ics"}
     download = Mock(return_value="calendar")
-    parser = Mock(return_value=[])
+    parser = AsyncMock(return_value=b"[]")
     (download if stage == "download" else parser).side_effect = ValueError("https://example.com/SECRET_TOKEN.ics")
-    with patch("main.download_calendar", download), patch("main.events", parser):
+    with patch("main.download_calendar", download), patch("main.process_calendar", parser):
         result = TestClient(main.app).get(f"/{route}/private")
     assert result.status_code == 400
     assert "SECRET_TOKEN" not in result.text
@@ -271,7 +271,7 @@ def test_errors_do_not_disclose_private_calendar_url(route, stage):
 
 def test_private_option_only_for_named_calendar():
     main.CONFIG["internal"] = {"url": "http://127.0.0.1/calendar", "allow private network": "true"}
-    with patch("main.download_calendar", return_value="calendar") as download, patch("main.events", return_value=[]):
+    with patch("main.download_calendar", return_value="calendar") as download, patch("main.process_calendar", new_callable=AsyncMock, return_value=b"[]"):
         client = TestClient(main.app)
         assert client.get("/cal/internal").status_code == 200
         download.assert_called_with("http://127.0.0.1/calendar", allow_private_network=True,

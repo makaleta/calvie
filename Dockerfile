@@ -16,6 +16,6 @@ ENV VERSION=${APP_VERSION} \
     PATH="/app/.venv/bin:$PATH"
 COPY --from=builder /app/.venv /app/.venv
 COPY templates ./templates
-COPY main.py calendar_source.py ./
+COPY main.py calendar_source.py calendar_processing.py calendar_worker.py ./
 EXPOSE 8080
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080", "--proxy-headers", "--forwarded-allow-ips=*"]

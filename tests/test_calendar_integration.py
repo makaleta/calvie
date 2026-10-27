@@ -44,7 +44,6 @@ class FixedDatetime(datetime):
 def calendar_client(monkeypatch, isolated_config):
     isolated_config['test'] = {'url': 'https://example.com/test.ics'}
     monkeypatch.setattr(main, 'datetime', FixedDatetime)
-    monkeypatch.setattr('icalevents.icalparser.now', lambda: FixedDatetime.now(pytz.UTC))
     with patch('main.download_calendar', return_value=CALENDAR):
         with TestClient(main.app) as client:
             yield client

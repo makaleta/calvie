@@ -7,7 +7,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import io
 import runpy
 import threading
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 import zlib
 
 import anyio
@@ -25,9 +25,9 @@ import main
 def calendar(monkeypatch):
     main.CONFIG["test"] = {"url": "https://example.com/SECRET.ics"}
     download = Mock(return_value="calendar")
-    parser = Mock(return_value=[])
+    parser = AsyncMock(return_value=b"[]")
     monkeypatch.setattr(main, "download_calendar", download)
-    monkeypatch.setattr(main, "events", parser)
+    monkeypatch.setattr(main, "process_calendar", parser)
     monkeypatch.setattr(main, "calendar_slots", anyio.CapacityLimiter(4))
     monkeypatch.setattr(main, "calendar_threads", anyio.CapacityLimiter(4))
     return download, parser
@@ -54,7 +54,13 @@ async def test_four_jobs_do_not_block_root_and_fifth_fails_immediately(calendar,
         assert release.wait(5), "test failed to release worker"
         return "calendar" if stage == "download" else []
 
-    (download if stage == "download" else parser).side_effect = blocking
+    if stage == "download":
+        download.side_effect = blocking
+    else:
+        async def processing(*_args, **_kwargs):
+            await asyncio.to_thread(blocking)
+            return b"[]"
+        parser.side_effect = processing
     async with httpx2.AsyncClient(transport=httpx2.ASGITransport(app=main.app), base_url="http://test") as client:
         jobs = [asyncio.create_task(client.get(f"/{route}/test")) for route in ["cal", "iframe", "cal", "iframe"]]
         try:
@@ -118,6 +124,8 @@ async def test_cancelled_request_keeps_slot_until_worker_finishes(calendar, monk
         assert main.calendar_slots.borrowed_tokens == 0
         download.side_effect = None
         assert (await client.get("/cal/test")).status_code == 200
+        # Cancellation during downloading must skip processing of the abandoned feed.
+        assert parser.call_count == 1
 
 
 @pytest.mark.parametrize("route", ["cal", "iframe"])
@@ -139,22 +147,7 @@ def test_configured_days_are_also_limited(calendar, days):
 def test_valid_days_and_default(calendar, days):
     params = {} if days is None else {"days": days}
     assert TestClient(main.app).get("/cal/test", params=params).status_code == 200
-    assert calendar[1].call_args.kwargs["end"].tzinfo is not None
-
-
-@pytest.mark.asyncio
-async def test_event_limit_accepts_boundary_and_checks_before_conversion(calendar):
-    event = Mock(all_day=False)
-    calendar[1].return_value = [event] * 5000
-    assert len(await main.cal_data("test")) == 5000
-    assert event.astimezone.call_count == 5000
-    event.reset_mock()
-    calendar[1].return_value = [event] * 5001
-    with pytest.raises(HTTPException) as caught:
-        await main.cal_data("test")
-    assert caught.value.status_code == 400
-    event.astimezone.assert_not_called()
-    assert main.calendar_slots.borrowed_tokens == 0
+    assert calendar[1].call_args.args[0]["end"]
 
 
 @pytest.mark.parametrize("route", ["cal", "iframe"])
@@ -167,8 +160,7 @@ def test_global_limits_cannot_be_increased_by_calendar_or_query(calendar, route)
     assert client.get(f"/{route}/test?max_calendar_bytes=99999999").status_code == 200
     calendar[0].assert_called_once_with("https://example.com/SECRET.ics", allow_private_network=False,
                                       max_bytes=5242880, timeout=60)
-    calendar[1].return_value = [Mock()] * 5001
-    assert client.get(f"/{route}/test").status_code == 400
+    assert calendar[1].call_args.args[0]["max_events"] == 5000
 
 
 @pytest.mark.parametrize("route", ["cal", "iframe"])
@@ -182,7 +174,7 @@ def test_timeout_status_and_redaction_release_slot(calendar, route, error):
     assert main.calendar_slots.borrowed_tokens == 0
 
 
-@pytest.mark.parametrize("option", ["max calendar bytes", "max days", "max events", "download timeout", "max concurrent calendars"])
+@pytest.mark.parametrize("option", ["max calendar bytes", "max days", "max events", "download timeout", "max concurrent calendars", "parser timeout", "parser memory mib", "max response bytes"])
 @pytest.mark.parametrize("value", ["0", "-1", "1.5", "invalid", ""])
 def test_invalid_global_limits_fail_at_startup(option, value, monkeypatch):
     def configured_read(config, *_args, **_kwargs):
@@ -197,7 +189,7 @@ def test_administrator_can_change_global_limits():
                        "download timeout": "2", "max concurrent calendars": "1"}.items():
         main.CONFIG["DEFAULT"][key] = value
     limits = main.ResourceLimits.from_config()
-    assert limits == main.ResourceLimits(1024, 10, 20, 2, 1)
+    assert limits == main.ResourceLimits(1024, 10, 20, 2, 1, 10, 256, 20971520)
 
 
 def body_response(body, headers=None):
