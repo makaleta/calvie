@@ -237,6 +237,33 @@ Dependencies are locked in `uv.lock`. After changing dependencies or the applica
 and commit both `pyproject.toml` and `uv.lock`. To update locked versions within
 the declared ranges, run `uv lock --upgrade` and rerun the tests.
 
+## GitHub Actions and publishing
+
+External actions in every workflow are pinned to full commit SHAs, with version
+comments. Workflow lockfiles were considered, but server-side enforcement could
+not be confirmed for this personal-account repository; GitHub currently documents
+them as an Enterprise Cloud preview. No preview lockfile is assumed to provide
+protection here. The local reusable test workflow runs from the same commit.
+
+Dependabot checks GitHub Actions every Monday at 09:00 Europe/Prague and groups
+version updates into one PR. Review the upstream release and commit changes,
+verify the full SHAs and version comments, and merge manually after checks pass.
+For a manual update, resolve the intended tag in the official upstream repository
+(including annotated tags), verify its commit, and update all matching uses.
+CodeQL init and analyze must use the same commit. Validate changes with actionlint
+and check that no external `uses` reference has reverted to a moving tag.
+
+Docker publishing still runs only after tests succeed for the same commit.
+The publishing job requires `refs/heads/master` for both push and manual runs;
+manual runs from another branch or tag may test but cannot log in to Docker Hub
+or overwrite `mkal/calvie:latest` and the project-version tag. Checkout steps do
+not retain Git credentials. Docker base images and Python dependency versions
+are maintained separately from this Actions update schedule.
+
+After merging, verify successful test/CodeQL runs and a Docker run on master;
+check that manually selected non-master refs skip the publishing job. These
+server-side checks and actual publishing are not performed by local validation.
+
 ## License
 
 This project is licensed under the MIT License.

@@ -8,6 +8,7 @@ Read `AGENTS.md` for repository layout, runtime behavior, and change guidance.
 - Start the app with `uv run --locked uvicorn main:app --reload`.
 - Named calendars use a local `config.ini`; direct calendar URLs use built-in defaults without this file. Never commit local configuration.
 - Keep `pyproject.toml` and `uv.lock` synchronized when changing dependencies.
+- Keep external Actions pinned to full upstream SHAs with version comments, checkout credentials disabled, and CodeQL pins synchronized. Dependabot maintains weekly grouped Actions PRs. Publishing requires same-commit tests and the master branch, including manual dispatch.
 - Verify runtime changes with focused tests and run the full suite before merging.
 - Docker uses Python 3.14 Alpine and production dependencies only; build with `docker build -t calvie .`.
 - Preserve non-root Docker execution, root-owned application files, and empty TCP proxy trust. Compose's UDS-only trust relies on restricted socket directory permissions; keep its primary config group separate from the supplemental proxy group, config read-only, and runtime privilege restrictions intact.
