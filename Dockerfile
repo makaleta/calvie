@@ -11,11 +11,16 @@ COPY pyproject.toml uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv uv sync --locked --no-dev
 
 FROM python AS runtime
+RUN addgroup -S -g 10001 calvie && adduser -S -D -H -u 10001 -G calvie calvie
 ARG APP_VERSION=DEVEL
 ENV VERSION=${APP_VERSION} \
+    PYTHONDONTWRITEBYTECODE=1 \
+    HOME=/tmp \
+    FORWARDED_ALLOW_IPS="" \
     PATH="/app/.venv/bin:$PATH"
 COPY --from=builder /app/.venv /app/.venv
 COPY templates ./templates
 COPY main.py calendar_source.py calendar_processing.py calendar_worker.py ./
 EXPOSE 8080
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080", "--proxy-headers", "--forwarded-allow-ips=*"]
+USER 10001:10001
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080", "--proxy-headers"]

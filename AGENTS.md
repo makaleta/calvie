@@ -78,6 +78,10 @@ Run commands from the repository root; configuration and template paths are rela
 
 ## Change guidance
 
+- Docker runs as UID/GID 10001:10001 with root-owned application files. TCP forwarded-header trust defaults to empty; administrators may explicitly set `FORWARDED_ALLOW_IPS`.
+- Compose identities are `CALVIE_UID`/`CALVIE_GID` (10001), with supplemental `CALVIE_SOCKET_GID` (33). Root filesystems and config mounts are read-only; socket mounts and `/tmp` tmpfs are writable. Preserve capability dropping, no-new-privileges, and init.
+- Compose's wildcard forwarded-header trust is intentional for UDS-only listeners: restrict the host socket directory to application ownership and proxy group with mode 2750. Keep config in the separate application group with mode 0640. Never adjust real deployment permissions automatically; document migration.
+
 - Keep the app lightweight; avoid introducing structure that is disproportionate to the repository size.
 - Preserve backward compatibility for the existing routes unless explicitly asked to change them.
 - Treat `config.ini` as user-provided local configuration; do not commit secrets or environment-specific values.

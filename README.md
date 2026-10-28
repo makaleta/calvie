@@ -161,10 +161,64 @@ You can also run the application using Docker:
     docker build -t calvie .
     ```
 
-2. Run the Docker container with your calendar configuration:
+2. Make configuration readable by the application group without giving access
+   to other users (keep its existing administrator owner):
+    ```sh
+    sudo chgrp 10001 config.ini
+    chmod 0640 config.ini
+    ```
+
+3. Run the Docker container with your calendar configuration:
     ```sh
     docker run --rm -p 8080:8080 -v "$PWD/config.ini:/app/config.ini:ro" calvie
     ```
+
+The image runs as UID/GID 10001:10001. Application files remain owned by root.
+TCP startup ignores forwarded headers by default. For a trusted TCP proxy,
+explicitly set its actual source IPs, for example
+`-e FORWARDED_ALLOW_IPS=172.20.0.10`; prevent clients from bypassing that proxy.
+The proxy must overwrite or correctly sanitize incoming forwarded headers.
+
+### Compose and host reverse proxy migration
+
+Compose keeps `main.sock` and the optional `backup.sock` for a host proxy running
+as `www-data` (UID/GID 33). Both containers use a read-only root filesystem,
+drop all capabilities, prevent privilege escalation, and use an init process.
+Only the socket directory and a 64 MiB `/tmp` tmpfs are writable; configuration
+is mounted read-only. Missing bind sources cause startup to fail instead of
+being created by Docker.
+Use a current stable Docker Compose release. Old prereleases such as
+`v2.0.0-rc.3` can silently discard `group_add` and bind-source creation settings;
+check that `docker compose --profile upgrade config` preserves them before deploying.
+
+Before upgrading, stop both services and prepare permissions. Run these commands
+from the repository root on the deployment host, not inside the container:
+
+```sh
+docker compose --profile upgrade down
+export CALVIE_UID=10001 CALVIE_GID=10001 CALVIE_SOCKET_GID=33
+sudo install -d -o "$CALVIE_UID" -g "$CALVIE_SOCKET_GID" -m 2750 ./sockets
+sudo rm -f ./sockets/main.sock ./sockets/backup.sock
+sudo chgrp "$CALVIE_GID" config.ini
+chmod 0640 config.ini
+docker compose up -d main
+```
+
+Use your chosen numeric IDs in the exports for custom identities, and supply
+the same variables on subsequent Compose invocations (or keep them in a local
+Compose environment file). The primary application group reads `config.ini`;
+the separate supplemental socket group gives the proxy access without granting
+it access to configuration. Keep configuration owned by its administrator.
+Ensure the proxy can traverse the socket directory's parent directories; do not
+make a private home directory broadly accessible as a shortcut.
+
+The setgid socket directory (2750) makes new sockets inherit the proxy group.
+Uvicorn creates sockets with mode 0666, so access control depends on this
+directory: unrelated users cannot enter it, and the proxy cannot create or delete
+files there. Compose explicitly trusts forwarded headers only on these UDS-only
+listeners, which have no published TCP ports. Every account allowed into the
+directory must be trusted to supply those headers. The proxy must sanitize them.
+Start the second service with `docker compose --profile upgrade up -d backup`.
 
 ## Testing
 
