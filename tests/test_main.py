@@ -15,7 +15,7 @@ def test_client():
 
 @pytest.fixture
 def loading(monkeypatch):
-    download = Mock(return_value="calendar")
+    download = AsyncMock(return_value="calendar")
     processor = AsyncMock(return_value=b"[]")
     monkeypatch.setattr(main, "download_calendar", download)
     monkeypatch.setattr(main, "process_calendar", processor)

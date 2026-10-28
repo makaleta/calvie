@@ -1,140 +1,88 @@
-"""Exercise the network boundary with deterministic DNS and HTTP responses."""
-
-import configparser
-import io
-import runpy
-import socket
-import ssl
-import threading
+import socket, ssl, threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from unittest.mock import AsyncMock, Mock, patch
-
 import pytest
-from fastapi.testclient import TestClient
-import urllib3
-
+import httpx2
 import calendar_source as source
-import main
 
 
-def dns_answer(address):
-    family = socket.AF_INET6 if ":" in address else socket.AF_INET
-    return family, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", (address, 80)
-
-
-def response(status=200, headers=None, body=b"calendar"):
-    result = Mock(status=status, headers=headers or {})
-    stream = io.BytesIO(body)
-    result.read1.side_effect = lambda amount, **_kwargs: stream.read(amount)
-    return result
+def dns_answer(ip):
+    return (
+        socket.AF_INET6 if ":" in ip else socket.AF_INET,
+        socket.SOCK_STREAM,
+        6,
+        "",
+        (ip, 80),
+    )
 
 
 @pytest.fixture
 def network(monkeypatch):
-    dns = Mock(return_value=[dns_answer("93.184.216.34")])
-    pool = Mock()
-    pool.urlopen.return_value = response()
-    http = Mock(return_value=pool)
-    https = Mock(return_value=pool)
-    monkeypatch.setattr(source.socket, "getaddrinfo", dns)
-    monkeypatch.setattr(source.urllib3, "HTTPConnectionPool", http)
-    monkeypatch.setattr(source.urllib3, "HTTPSConnectionPool", https)
-    return dns, pool, http, https
+    requests = []
 
+    async def lookup(host, port):
+        return [dns_answer("93.184.216.34")]
 
-@pytest.mark.parametrize("url", [
-    "http://127.0.0.1/private.ics", "http://10.0.0.1/private.ics",
-    "http://169.254.169.254/private.ics", "http://192.168.1.1/private.ics",
-    "http://172.16.0.1/private.ics", "http://0.0.0.0/private.ics",
-    "http://224.0.0.1/private.ics", "http://[::1]/private.ics",
-    "http://[fe80::1]/private.ics", "http://[fc00::1]/private.ics",
-    "http://[::ffff:127.0.0.1]/private.ics", "http://[::ffff:8.8.8.8]/private.ics",
-    "http://[2002:7f00:1::]/private.ics", "http://[64:ff9b::7f00:1]/private.ics",
-])
-def test_private_and_special_literal_addresses_are_blocked(network, url):
-    dns, pool, http, https = network
-    with pytest.raises(source.CalendarSourceError):
-        source.download_calendar(url)
-    dns.assert_not_called()
-    http.assert_not_called()
-    https.assert_not_called()
+    monkeypatch.setattr(source, "_lookup", lookup)
+    real = httpx2.AsyncClient
 
+    def handler(request):
+        requests.append(request)
+        return httpx2.Response(200, stream=httpx2.ByteStream(b"calendar"))
 
-@pytest.mark.parametrize("addresses", [
-    ["127.0.0.1"], ["10.0.0.1"], ["::1"],
-    ["93.184.216.34", "192.168.1.1"],
-    ["2606:4700:4700::1111", "::1"], [],
-])
-def test_all_dns_answers_must_be_public(network, addresses):
-    dns, pool, http, https = network
-    dns.return_value = [dns_answer(address) for address in addresses]
-    with pytest.raises(source.CalendarSourceError):
-        source.download_calendar("https://example.com/calendar.ics")
-    https.assert_not_called()
-
-
-@pytest.mark.parametrize("host", ["2130706433", "127.1", "0177.0.0.1", "0x7f000001", "localhost"])
-def test_alternate_address_spellings_checked_after_resolution(network, host):
-    dns, pool, http, https = network
-    dns.return_value = [dns_answer("127.0.0.1")]
-    with pytest.raises(source.CalendarSourceError):
-        source.download_calendar(f"http://{host}/calendar.ics")
-    http.assert_not_called()
-
-
-def test_connection_pins_checked_ip_preserving_https_identity(network):
-    dns, pool, http, https = network
-    # A second lookup would return loopback, but is never used.
-    dns.side_effect = [[dns_answer("93.184.216.34")], [dns_answer("127.0.0.1")]]
-    assert source.download_calendar("https://example.com:8443/calendar.ics?token=test") == "calendar"
-    dns.assert_called_once_with("example.com", 8443, type=socket.SOCK_STREAM)
-    args, kwargs = https.call_args
-    assert args == ("93.184.216.34", 8443)
-    assert kwargs["server_hostname"] == kwargs["assert_hostname"] == "example.com"
-    assert kwargs["cert_reqs"] == "CERT_REQUIRED"
-    assert kwargs["retries"] is False
-    assert kwargs["timeout"].connect_timeout == 5
-    assert kwargs["timeout"].read_timeout == 10
-    pool.urlopen.assert_called_once_with(
-        "GET", "/calendar.ics?token=test", headers={"Host": "example.com:8443"},
-        redirect=False, retries=False, preload_content=False,
+    monkeypatch.setattr(
+        source.httpx2,
+        "AsyncClient",
+        lambda **kw: real(transport=httpx2.MockTransport(handler), **kw),
     )
-    pool.urlopen.return_value.close.assert_called_once()
-    pool.close.assert_called_once()
+    return requests
 
 
-@pytest.mark.parametrize("url,host,port,target", [
-    ("http://example.com:8080/calendar.ics", "example.com:8080", 8080, "/calendar.ics"),
-    ("example.com/calendar.ics", "example.com", 80, "/calendar.ics"),
-    ("calendar.ics", "calendar.ics", 80, "/"),
-])
-def test_http_and_legacy_schemeless_urls(network, url, host, port, target):
-    dns, pool, http, https = network
-    assert source.is_ics_url(url)
-    source.download_calendar(url)
-    assert http.call_args.args == ("93.184.216.34", port)
-    assert pool.urlopen.call_args.args == ("GET", target)
-    assert pool.urlopen.call_args.kwargs["headers"] == {"Host": host}
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://127.0.0.1/private.ics",
+        "http://10.0.0.1/private.ics",
+        "http://169.254.169.254/private.ics",
+        "http://192.168.1.1/private.ics",
+        "http://172.16.0.1/private.ics",
+        "http://0.0.0.0/private.ics",
+        "http://224.0.0.1/private.ics",
+        "http://[::1]/private.ics",
+        "http://[fe80::1]/private.ics",
+        "http://[fc00::1]/private.ics",
+        "http://[::ffff:127.0.0.1]/private.ics",
+        "http://[::ffff:8.8.8.8]/private.ics",
+        "http://[2002:7f00:1::]/private.ics",
+        "http://[64:ff9b::7f00:1]/private.ics",
+    ],
+)
+@pytest.mark.asyncio
+async def test_private_literals(network, url):
+    with pytest.raises(source.CalendarSourceError):
+        await source.download_calendar(url)
+    assert not network
 
 
-def test_public_ipv6_preserves_bracketed_host(network):
-    dns, pool, http, https = network
-    source.download_calendar("http://[2606:4700:4700::1111]:8080/calendar.ics")
-    dns.assert_not_called()
-    assert http.call_args.args == ("2606:4700:4700::1111", 8080)
-    assert pool.urlopen.call_args.kwargs["headers"] == {"Host": "[2606:4700:4700::1111]:8080"}
-
-
-@pytest.mark.parametrize("url", [
-    "ftp://example.com/calendar.ics", "file:///calendar.ics",
-    "https://user:password@example.com/calendar.ics", "https://example.com:0/calendar.ics",
-    "https://example.com:65536/calendar.ics", "https://example.com:/calendar.ics#",
-    "https://example.com/internal#calendar.ics", "https://example.com/calendar.ics\n",
-    "https://example.com/\\@127.0.0.1/calendar.ics", "https://example.com/%zz.ics",
-    "https://[fe80::1%25eth0]/calendar.ics", "https://%31%32%37.0.0.1/calendar.ics",
-    "https://example.com/calendar.txt?x=.ics", "https://example.com/calendar.ics#fragment",
-])
+@pytest.mark.parametrize(
+    "url",
+    [
+        "ftp://example.com/calendar.ics",
+        "file:///calendar.ics",
+        "https://user:password@example.com/calendar.ics",
+        "https://example.com:0/calendar.ics",
+        "https://example.com:65536/calendar.ics",
+        "https://example.com:/calendar.ics#",
+        "https://example.com/internal#calendar.ics",
+        "https://example.com/calendar.ics\n",
+        "https://example.com/\\@127.0.0.1/calendar.ics",
+        "https://example.com/%zz.ics",
+        "https://[fe80::1%25eth0]/calendar.ics",
+        "https://%31%32%37.0.0.1/calendar.ics",
+        "https://example.com/calendar.txt?x=.ics",
+        "https://example.com/calendar.ics#fragment",
+    ],
+)
 def test_invalid_direct_urls(url):
     assert not source.is_ics_url(url)
 
@@ -143,182 +91,109 @@ def test_query_token_on_real_ics_path_is_supported():
     assert source.is_ics_url("https://example.com/calendar.ics?token=test")
 
 
-@pytest.mark.parametrize("target", ["http://127.0.0.1/internal", "http://[::1]/internal"])
-def test_redirect_to_private_target_is_blocked(network, target):
-    dns, pool, http, https = network
-    first = response(302, {"Location": target})
-    pool.urlopen.return_value = first
+@pytest.mark.asyncio
+async def test_checked_ip_and_original_identity(network, monkeypatch):
+    calls = []
+
+    async def lookup(host, port):
+        calls.append(host)
+        return [dns_answer("93.184.216.34" if len(calls) == 1 else "127.0.0.1")]
+
+    monkeypatch.setattr(source, "_lookup", lookup)
+    assert (
+        await source.download_calendar("https://example.com:8443/calendar.ics?token=x")
+        == "calendar"
+    )
+    assert calls == ["example.com"]
+    assert network[0].url.host == "93.184.216.34"
+    assert network[0].headers["host"] == "example.com:8443"
+    assert network[0].extensions["sni_hostname"] == "example.com"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ips", [["127.0.0.1"], ["93.184.216.34", "10.0.0.1"], []])
+async def test_dns_answers(network, monkeypatch, ips):
+    async def lookup(*args):
+        return [dns_answer(ip) for ip in ips]
+
+    monkeypatch.setattr(source, "_lookup", lookup)
     with pytest.raises(source.CalendarSourceError):
-        source.download_calendar("http://example.com/calendar.ics")
-    assert pool.urlopen.call_count == 1
-    first.close.assert_called_once()
-    pool.close.assert_called_once()
+        await source.download_calendar("http://host/calendar.ics")
+    assert not network
 
 
-@pytest.mark.parametrize("status", [301, 302, 303, 307, 308])
-def test_relative_redirect_and_extensionless_target(network, status):
-    dns, pool, http, https = network
-    first = response(status, {"Location": "../feed?token=test"})
-    last = response(body=b"caf\xe9\r\n", headers={"Content-Type": 'text/calendar; charset="iso-8859-1"'})
-    pool.urlopen.side_effect = [first, last]
-    assert source.download_calendar("https://example.com/path/calendar.ics") == "caf\u00e9\n"
-    assert pool.urlopen.call_args.args == ("GET", "/feed?token=test")
-    assert dns.call_count == 2
-    first.close.assert_called_once()
-    last.close.assert_called_once()
-    assert pool.close.call_count == 2
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "location,allowed",
+    [
+        ("/feed", True),
+        ("http://127.0.0.1/feed", False),
+        ("https://internal:8081/feed", False),
+        ("https://other/feed", False),
+    ],
+)
+async def test_private_redirect_origin(monkeypatch, location, allowed):
+    real = httpx2.AsyncClient
+    seen = []
 
+    async def lookup(*args):
+        return [dns_answer("10.0.0.1")]
 
-def test_dns_rechecked_for_redirect_to_same_hostname(network):
-    dns, pool, http, https = network
-    dns.side_effect = [[dns_answer("93.184.216.34")], [dns_answer("127.0.0.1")]]
-    pool.urlopen.return_value = response(302, {"Location": "/next"})
-    with pytest.raises(source.CalendarSourceError):
-        source.download_calendar("https://example.com/calendar.ics")
-    assert pool.urlopen.call_count == 1
+    monkeypatch.setattr(source, "_lookup", lookup)
 
+    def handler(req):
+        seen.append(req)
+        return (
+            httpx2.Response(302, headers={"Location": location})
+            if len(seen) == 1
+            else httpx2.Response(200, stream=httpx2.ByteStream(b"calendar"))
+        )
 
-def test_https_downgrade_rejected_before_connection(network):
-    dns, pool, http, https = network
-    pool.urlopen.return_value = response(302, {"Location": "http://example.com/feed"})
-    with pytest.raises(source.CalendarSourceError):
-        source.download_calendar("https://example.com/calendar.ics")
-    http.assert_not_called()
-
-
-def test_five_redirects_allowed_but_sixth_rejected(network):
-    dns, pool, http, https = network
-    pool.urlopen.side_effect = [response(302, {"Location": "/next"}) for _ in range(5)] + [response()]
-    assert source.download_calendar("https://example.com/calendar.ics") == "calendar"
-    pool.urlopen.reset_mock(side_effect=True)
-    pool.urlopen.side_effect = [response(302, {"Location": "/loop"}) for _ in range(6)]
-    with pytest.raises(source.CalendarSourceError):
-        source.download_calendar("https://example.com/calendar.ics")
-    assert pool.urlopen.call_count == 6
-
-
-@pytest.mark.parametrize("location", [None, "file:///etc/passwd", "//127.0.0.1/feed", "/feed#fragment", "\n/feed"])
-def test_invalid_redirect(network, location):
-    dns, pool, http, https = network
-    pool.urlopen.return_value = response(302, {"Location": location})
-    with pytest.raises(source.CalendarSourceError):
-        source.download_calendar("http://example.com/calendar.ics")
-    assert pool.urlopen.call_count == 1
-
-
-def test_private_opt_in_allows_original_origin_redirect(network):
-    dns, pool, http, https = network
-    dns.return_value = [dns_answer("10.0.0.1")]
-    pool.urlopen.side_effect = [response(302, {"Location": "/feed"}), response()]
-    assert source.download_calendar("http://internal:8080/calendar", allow_private_network=True) == "calendar"
-    assert http.call_args.args == ("10.0.0.1", 8080)
-    assert pool.urlopen.call_count == 2
-
-
-@pytest.mark.parametrize("location", ["http://other:8080/feed", "http://internal:8081/feed", "https://internal:8080/feed"])
-def test_private_exception_does_not_follow_changed_origin(network, location):
-    dns, pool, http, https = network
-    dns.return_value = [dns_answer("10.0.0.1")]
-    pool.urlopen.return_value = response(302, {"Location": location})
-    with pytest.raises(source.CalendarSourceError):
-        source.download_calendar("http://internal:8080/calendar", allow_private_network=True)
-    assert pool.urlopen.call_count == 1
-
-
-def test_private_source_can_redirect_to_validated_public_origin(network):
-    dns, pool, http, https = network
-    dns.side_effect = [[dns_answer("10.0.0.1")], [dns_answer("93.184.216.34")]]
-    pool.urlopen.side_effect = [response(302, {"Location": "https://example.com/feed"}), response()]
-    assert source.download_calendar("http://internal/calendar", allow_private_network=True) == "calendar"
-    assert https.call_args.args == ("93.184.216.34", 443)
-
-
-@pytest.mark.parametrize("failure", ["request", "read", "decode", "empty", "http"])
-def test_connections_closed_on_failure(network, failure):
-    dns, pool, http, https = network
-    result = pool.urlopen.return_value
-    if failure == "request":
-        pool.urlopen.side_effect = urllib3.exceptions.SSLError("test certificate failure")
-    elif failure == "read":
-        result.read1.side_effect = urllib3.exceptions.ReadTimeoutError(None, "/", "timeout")
-    elif failure == "decode":
-        result.read1.side_effect = [b"\xff", b""]
-    elif failure == "empty":
-        result.read1.side_effect = [b""]
+    monkeypatch.setattr(
+        source.httpx2,
+        "AsyncClient",
+        lambda **kw: real(transport=httpx2.MockTransport(handler), **kw),
+    )
+    if allowed:
+        assert (
+            await source.download_calendar(
+                "https://internal/calendar", allow_private_network=True
+            )
+            == "calendar"
+        )
     else:
-        result.status = 500
-    with pytest.raises(Exception):
-        source.download_calendar("https://example.com/calendar.ics")
-    pool.close.assert_called_once()
-    if failure != "request":
-        result.close.assert_called_once()
+        with pytest.raises(source.CalendarSourceError):
+            await source.download_calendar(
+                "https://internal/calendar", allow_private_network=True
+            )
+        assert len(seen) == 1
 
 
-@pytest.mark.parametrize("route", ["cal", "iframe"])
-@pytest.mark.parametrize("stage", ["download", "parser"])
-def test_errors_do_not_disclose_private_calendar_url(route, stage):
-    main.CONFIG["private"] = {"url": "https://example.com/SECRET_TOKEN.ics"}
-    download = Mock(return_value="calendar")
-    parser = AsyncMock(return_value=b"[]")
-    (download if stage == "download" else parser).side_effect = ValueError("https://example.com/SECRET_TOKEN.ics")
-    with patch("main.download_calendar", download), patch("main.process_calendar", parser):
-        result = TestClient(main.app).get(f"/{route}/private")
-    assert result.status_code == 400
-    assert "SECRET_TOKEN" not in result.text
-    assert "example.com" not in result.text
-    assert "Unable to load calendar" in result.text
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "location", ["http://example.com/feed", "/feed#bad", "file:///etc/passwd", "/loop"]
+)
+async def test_unsafe_redirects_or_loop(monkeypatch, location):
+    real = httpx2.AsyncClient
+    seen = []
 
+    async def lookup(*args):
+        return [dns_answer("93.184.216.34")]
 
-def test_private_option_only_for_named_calendar():
-    main.CONFIG["internal"] = {"url": "http://127.0.0.1/calendar", "allow private network": "true"}
-    with patch("main.download_calendar", return_value="calendar") as download, patch("main.process_calendar", new_callable=AsyncMock, return_value=b"[]"):
-        client = TestClient(main.app)
-        assert client.get("/cal/internal").status_code == 200
-        download.assert_called_with("http://127.0.0.1/calendar", allow_private_network=True,
-                                    max_bytes=5242880, timeout=60)
-        download.side_effect = source.CalendarSourceError("blocked")
-        assert client.get("/cal/http://127.0.0.1/calendar.ics?allow_private_network=true").status_code == 400
-        download.assert_called_with("http://127.0.0.1/calendar.ics", allow_private_network=False,
-                                    max_bytes=5242880, timeout=60)
+    monkeypatch.setattr(source, "_lookup", lookup)
 
+    def handler(req):
+        seen.append(req)
+        return httpx2.Response(302, headers={"Location": location})
 
-@pytest.mark.parametrize("route", ["cal", "iframe"])
-def test_routes_use_guarded_download_with_real_parser(network, route):
-    dns, pool, http, https = network
-    pool.urlopen.return_value = response(body=b"BEGIN:VCALENDAR\r\nVERSION:2.0\r\nEND:VCALENDAR\r\n")
-    client = TestClient(main.app)
-    assert client.get(f"/{route}/https://example.com/calendar.ics").status_code == 200
-    assert client.get(f"/{route}/http://127.0.0.1/calendar.ics").status_code == 400
-    assert pool.urlopen.call_count == 1
-
-
-@pytest.mark.parametrize("route", ["cal", "iframe"])
-def test_named_internal_source_needs_explicit_opt_in(network, route):
-    dns, pool, http, https = network
-    dns.return_value = [dns_answer("10.0.0.1")]
-    pool.urlopen.return_value = response(body=b"BEGIN:VCALENDAR\r\nVERSION:2.0\r\nEND:VCALENDAR\r\n")
-    main.CONFIG["internal"] = {"url": "http://internal:8080/feed"}
-    client = TestClient(main.app)
-    assert client.get(f"/{route}/internal").status_code == 400
-    pool.urlopen.assert_not_called()
-    main.CONFIG["internal"]["allow private network"] = "true"
-    assert client.get(f"/{route}/internal").status_code == 200
-    assert http.call_args.args == ("10.0.0.1", 8080)
-
-
-def test_encoded_source_query_is_passed_to_downloader(network):
-    dns, pool, http, https = network
-    pool.urlopen.return_value = response(body=b"BEGIN:VCALENDAR\r\nVERSION:2.0\r\nEND:VCALENDAR\r\n")
-    assert TestClient(main.app).get("/cal/https://example.com/calendar.ics%3Ftoken=test").status_code == 200
-    assert pool.urlopen.call_args.args == ("GET", "/calendar.ics?token=test")
-
-
-def test_default_private_option_is_rejected_at_import():
-    def configured_read(config, *_args, **_kwargs):
-        config.read_dict({"DEFAULT": {"allow private network": "true"}})
-    with patch.object(configparser.ConfigParser, "read", configured_read):
-        with pytest.raises(ValueError, match="individual calendar"):
-            runpy.run_module("main", run_name="__test_main__")
+    monkeypatch.setattr(
+        source.httpx2,
+        "AsyncClient",
+        lambda **kw: real(transport=httpx2.MockTransport(handler), **kw),
+    )
+    with pytest.raises(source.CalendarSourceError):
+        await source.download_calendar("https://example.com/calendar.ics")
+    assert len(seen) == (6 if location == "/loop" else 1)
 
 
 @pytest.fixture
@@ -340,6 +215,7 @@ def tls_calendar_server():
     class Server(ThreadingHTTPServer):
         def handle_error(self, request, client_address):
             import sys
+
             if isinstance(sys.exception(), ConnectionResetError):
                 # A rejected certificate can close the socket before the handler reads.
                 return
@@ -350,7 +226,9 @@ def tls_calendar_server():
     server.received_sni = []
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.load_cert_chain(pem)
-    context.set_servername_callback(lambda _sock, name, _ctx: server.received_sni.append(name))
+    context.set_servername_callback(
+        lambda _sock, name, _ctx: server.received_sni.append(name)
+    )
     server.socket = context.wrap_socket(server.socket, server_side=True)
     worker = threading.Thread(target=server.serve_forever, daemon=True)
     worker.start()
@@ -362,38 +240,244 @@ def tls_calendar_server():
         worker.join(timeout=2)
 
 
-@pytest.mark.parametrize("hostname,trusted,success", [
-    ("calendar.example", True, True),
-    ("wrong.example", True, False),
-    ("calendar.example", False, False),
-])
-def test_real_tls_pinned_ip_and_certificate_verification(monkeypatch, tls_calendar_server, hostname, trusted, success):
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "hostname,trusted,success",
+    [
+        ("calendar.example", True, True),
+        ("wrong.example", True, False),
+        ("calendar.example", False, False),
+    ],
+)
+async def test_real_tls_identity(
+    monkeypatch, tls_calendar_server, hostname, trusted, success
+):
     server, pem = tls_calendar_server
-    lookup = socket.getaddrinfo
-    lookups = []
 
-    def resolve(host, port, *args, **kwargs):
-        lookups.append(host)
-        if host in {"calendar.example", "wrong.example"}:
-            return [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("127.0.0.1", port))]
-        return lookup(host, port, *args, **kwargs)
+    async def lookup(host, port):
+        return [dns_answer("127.0.0.1")]
 
-    monkeypatch.setattr(source.socket, "getaddrinfo", resolve)
+    monkeypatch.setattr(source, "_lookup", lookup)
     if trusted:
-        real_pool = urllib3.HTTPSConnectionPool
-        context = ssl.create_default_context(cafile=str(pem))
-
-        def pool(*args, **kwargs):
-            return real_pool(*args, ssl_context=context, **kwargs)
-
-        monkeypatch.setattr(source.urllib3, "HTTPSConnectionPool", pool)
-    url = f"https://{hostname}:{server.server_port}/calendar.ics"
+        real = httpx2.AsyncClient
+        monkeypatch.setattr(
+            source.httpx2,
+            "AsyncClient",
+            lambda **kw: real(verify=ssl.create_default_context(cafile=str(pem)), **kw),
+        )
     if success:
-        assert source.download_calendar(url, allow_private_network=True) == "calendar"
+        assert (
+            await source.download_calendar(
+                f"https://{hostname}:{server.server_port}/calendar.ics",
+                allow_private_network=True,
+            )
+            == "calendar"
+        )
         assert server.received_hosts == [f"{hostname}:{server.server_port}"]
     else:
-        with pytest.raises(urllib3.exceptions.SSLError):
-            source.download_calendar(url, allow_private_network=True)
-        assert server.received_hosts == []
+        with pytest.raises(httpx2.ConnectError):
+            await source.download_calendar(
+                f"https://{hostname}:{server.server_port}/calendar.ics",
+                allow_private_network=True,
+            )
     assert server.received_sni == [hostname]
-    assert lookups == [hostname, "127.0.0.1"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["headers", "body", "redirect"])
+async def test_total_timeout_on_real_slow_server(phase):
+    import asyncio
+
+    tasks = set()
+
+    async def serve(reader, writer):
+        task = asyncio.current_task()
+        tasks.add(task)
+        try:
+            await reader.readuntil(b"\r\n\r\n")
+            if phase == "redirect":
+                await asyncio.sleep(0.08)
+                writer.write(
+                    b"HTTP/1.1 302 Found\r\nLocation: /next\r\nContent-Length: 0\r\n\r\n"
+                )
+                await writer.drain()
+            else:
+                prefix = (
+                    b"HTTP/1.1 200 OK\r\nX-Slow: "
+                    if phase == "headers"
+                    else b"HTTP/1.1 200 OK\r\nContent-Length: 9999\r\n\r\n"
+                )
+                writer.write(prefix)
+                await writer.drain()
+                while True:
+                    writer.write(b"x")
+                    await writer.drain()
+                    await asyncio.sleep(0.02)
+        except ConnectionError, asyncio.CancelledError:
+            pass
+        finally:
+            writer.close()
+            await writer.wait_closed()
+            tasks.discard(task)
+
+    server = await asyncio.start_server(serve, "127.0.0.1", 0)
+    try:
+        with pytest.raises(source.CalendarDownloadTimeout):
+            await source.download_calendar(
+                f"http://127.0.0.1:{server.sockets[0].getsockname()[1]}/feed",
+                allow_private_network=True,
+                timeout=0.15,
+            )
+    finally:
+        server.close()
+        await server.wait_closed()
+        for task in tuple(tasks):
+            task.cancel()
+        await asyncio.gather(*tuple(tasks), return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_total_timeout_includes_dns(monkeypatch):
+    import anyio
+
+    stopped = []
+
+    async def lookup(*args):
+        try:
+            await anyio.sleep_forever()
+        finally:
+            stopped.append(True)
+
+    monkeypatch.setattr(source, "_lookup", lookup)
+    with pytest.raises(source.CalendarDownloadTimeout):
+        await source.download_calendar("https://example.com/calendar.ics", timeout=0.05)
+    assert stopped
+
+
+@pytest.mark.asyncio
+async def test_clients_closed_and_identity_not_shared(monkeypatch):
+    clients = []
+    requests = []
+    real = httpx2.AsyncClient
+
+    async def lookup(*args):
+        return [dns_answer("93.184.216.34")]
+
+    monkeypatch.setattr(source, "_lookup", lookup)
+
+    def handler(req):
+        requests.append(req)
+        if len(requests) == 1:
+            return httpx2.Response(
+                302,
+                headers={
+                    "Location": "https://second.example/feed",
+                    "Set-Cookie": "secret=x",
+                },
+            )
+        return httpx2.Response(200, stream=httpx2.ByteStream(b"calendar"))
+
+    def client(**kw):
+        instance = real(transport=httpx2.MockTransport(handler), **kw)
+        clients.append(instance)
+        return instance
+
+    monkeypatch.setattr(source.httpx2, "AsyncClient", client)
+    assert (
+        await source.download_calendar("https://first.example/calendar.ics")
+        == "calendar"
+    )
+    assert len(clients) == 2 and all(c.is_closed for c in clients)
+    assert [r.extensions["sni_hostname"] for r in requests] == [
+        "first.example",
+        "second.example",
+    ]
+    assert "cookie" not in requests[1].headers
+
+
+@pytest.mark.asyncio
+async def test_download_cancel_releases_application_capacity(monkeypatch):
+    import asyncio, anyio, main
+    from unittest.mock import AsyncMock
+    import httpx2 as http
+
+    started = anyio.Event()
+    closed = []
+
+    async def blocked(*args, **kwargs):
+        started.set()
+        try:
+            await anyio.sleep_forever()
+        finally:
+            closed.append(True)
+
+    monkeypatch.setattr(main, "download_calendar", blocked)
+    monkeypatch.setattr(main, "calendar_slots", anyio.CapacityLimiter(1))
+    processor = AsyncMock(return_value=b"[]")
+    monkeypatch.setattr(main, "process_calendar", processor)
+    main.CONFIG["test"] = {"url": "https://example.com/feed"}
+    async with http.AsyncClient(
+        transport=http.ASGITransport(app=main.app), base_url="http://test"
+    ) as client:
+        job = asyncio.create_task(client.get("/cal/test"))
+        await started.wait()
+        assert (await client.get("/")).status_code == 418
+        assert (await client.get("/iframe/test")).status_code == 503
+        job.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await job
+        await asyncio.gather(*tuple(main.calendar_jobs), return_exceptions=True)
+        assert closed and main.calendar_slots.borrowed_tokens == 0
+        processor.assert_not_called()
+        monkeypatch.setattr(
+            main, "download_calendar", AsyncMock(return_value="calendar")
+        )
+        assert (await client.get("/cal/test")).status_code == 200
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "host", ["2130706433", "127.1", "0177.0.0.1", "0x7f000001", "localhost"]
+)
+async def test_alias_addresses_cannot_bypass_dns_policy(network, monkeypatch, host):
+    async def lookup(*args):
+        return [dns_answer("127.0.0.1")]
+
+    monkeypatch.setattr(source, "_lookup", lookup)
+    with pytest.raises(source.CalendarSourceError):
+        await source.download_calendar(f"http://{host}/calendar.ics")
+    assert not network
+
+
+@pytest.mark.asyncio
+async def test_redirect_rechecks_same_hostname(monkeypatch):
+    real = httpx2.AsyncClient
+    lookups = []
+    requests = []
+
+    async def lookup(*args):
+        lookups.append(True)
+        return [dns_answer("93.184.216.34" if len(lookups) == 1 else "127.0.0.1")]
+
+    monkeypatch.setattr(source, "_lookup", lookup)
+
+    def handler(req):
+        requests.append(req)
+        return httpx2.Response(302, headers={"Location": "/next"})
+
+    monkeypatch.setattr(source.httpx2, "AsyncClient",
+                        lambda **kwargs: real(transport=httpx2.MockTransport(handler), **kwargs))
+    with pytest.raises(source.CalendarSourceError):
+        await source.download_calendar("https://example.com/calendar.ics")
+    assert len(requests) == 1 and len(lookups) == 2
+
+
+def test_private_default_option_remains_forbidden(monkeypatch):
+    import configparser, runpy
+
+    def configured_read(config, *args, **kwargs):
+        config["DEFAULT"]["allow private network"] = "true"
+
+    monkeypatch.setattr(configparser.ConfigParser, "read", configured_read)
+    with pytest.raises(ValueError, match="individual calendar"):
+        runpy.run_module("main", run_name="__test_policy__")

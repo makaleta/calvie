@@ -1,5 +1,5 @@
 """Regression coverage for automatic and explicitly selected iframe themes."""
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import main
 import calendar_worker
@@ -20,7 +20,7 @@ def render_in_process(monkeypatch, isolated_config):
 
 @pytest.mark.parametrize('scheme', ['light dark', 'dark light'])
 def test_automatic_scheme_scopes_dark_colors_to_media_query(scheme):
-    with patch('main.download_calendar', return_value='BEGIN:VCALENDAR\nVERSION:2.0\nEND:VCALENDAR\n'):
+    with patch('main.download_calendar', new_callable=AsyncMock, return_value='BEGIN:VCALENDAR\nVERSION:2.0\nEND:VCALENDAR\n'):
         response = TestClient(app).get('/iframe/test', params={'color_scheme': scheme})
     assert response.status_code == 200
     css = response.text.split('<style>')[1].split('</style>')[0]
@@ -31,7 +31,7 @@ def test_automatic_scheme_scopes_dark_colors_to_media_query(scheme):
 
 
 def test_normal_does_not_enable_dark_theme():
-    with patch('main.download_calendar', return_value='BEGIN:VCALENDAR\nVERSION:2.0\nEND:VCALENDAR\n'):
+    with patch('main.download_calendar', new_callable=AsyncMock, return_value='BEGIN:VCALENDAR\nVERSION:2.0\nEND:VCALENDAR\n'):
         response = TestClient(app).get('/iframe/test', params={'color_scheme': 'normal', 'colour': 'black'})
     assert response.status_code == 200
     assert 'color-scheme: normal' in response.text
@@ -40,7 +40,7 @@ def test_normal_does_not_enable_dark_theme():
 
 
 def test_default_scheme_remains_automatic():
-    with patch('main.download_calendar', return_value='BEGIN:VCALENDAR\nVERSION:2.0\nEND:VCALENDAR\n'):
+    with patch('main.download_calendar', new_callable=AsyncMock, return_value='BEGIN:VCALENDAR\nVERSION:2.0\nEND:VCALENDAR\n'):
         response = TestClient(app).get('/iframe/test')
     assert response.status_code == 200
     assert 'color-scheme: light dark' in response.text
@@ -63,7 +63,7 @@ def test_invalid_scheme_is_rejected_before_loading_calendar():
     ({'colour': 'white', 'color_scheme': 'dark'}, 'dark', True),
 ])
 def test_explicit_and_legacy_theme_compatibility(params, css_scheme, dark):
-    with patch('main.download_calendar', return_value='BEGIN:VCALENDAR\nVERSION:2.0\nEND:VCALENDAR\n'):
+    with patch('main.download_calendar', new_callable=AsyncMock, return_value='BEGIN:VCALENDAR\nVERSION:2.0\nEND:VCALENDAR\n'):
         response = TestClient(app).get('/iframe/test', params=params)
     assert response.status_code == 200
     assert f'color-scheme: {css_scheme};' in response.text
@@ -72,7 +72,7 @@ def test_explicit_and_legacy_theme_compatibility(params, css_scheme, dark):
 
 
 def test_custom_locale_and_width_preserved():
-    with patch('main.download_calendar', return_value='BEGIN:VCALENDAR\nVERSION:2.0\nEND:VCALENDAR\n'):
+    with patch('main.download_calendar', new_callable=AsyncMock, return_value='BEGIN:VCALENDAR\nVERSION:2.0\nEND:VCALENDAR\n'):
         response = TestClient(app).get('/iframe/test', params={'locale': 'de_DE', 'width': 400})
     assert response.status_code == 200
     assert '<html lang="de_DE">' in response.text

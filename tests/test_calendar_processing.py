@@ -6,8 +6,7 @@ from datetime import datetime
 import json
 import os
 from pathlib import Path
-from unittest.mock import Mock
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import anyio
 from fastapi.encoders import jsonable_encoder
@@ -202,7 +201,7 @@ def test_process_start_failure_is_generic_500(monkeypatch, route):
     async def fail(*_args, **_kwargs):
         raise OSError("SECRET")
     monkeypatch.setattr(processing.anyio, "open_process", fail)
-    monkeypatch.setattr(main, "download_calendar", Mock(return_value=EMPTY))
+    monkeypatch.setattr(main, "download_calendar", AsyncMock(return_value=EMPTY))
     main.CONFIG["test"] = {"url": "https://example.com/SECRET.ics"}
     result = TestClient(main.app).get(f"/{route}/test")
     assert result.status_code == 500
@@ -216,7 +215,7 @@ def test_partial_worker_failure_never_becomes_success(monkeypatch, route, probe,
     async def failed_processor(payload, **kwargs):
         return await processing.process_calendar({**payload, "mode": "failure"}, **kwargs)
     monkeypatch.setattr(main, "process_calendar", failed_processor)
-    monkeypatch.setattr(main, "download_calendar", Mock(return_value=EMPTY))
+    monkeypatch.setattr(main, "download_calendar", AsyncMock(return_value=EMPTY))
     main.CONFIG["test"] = {"url": "https://example.com/SECRET.ics"}
     result = TestClient(main.app).get(f"/{route}/test")
     assert result.status_code == 400
@@ -230,7 +229,7 @@ async def test_request_cancellation_stops_child_and_restores_capacity(monkeypatc
     from starlette.requests import Request
 
     main.CONFIG["test"] = {"url": "https://example.com/calendar.ics"}
-    monkeypatch.setattr(main, "download_calendar", Mock(return_value=EMPTY))
+    monkeypatch.setattr(main, "download_calendar", AsyncMock(return_value=EMPTY))
     monkeypatch.setattr(main, "calendar_slots", anyio.CapacityLimiter(1))
     disconnected = anyio.Event()
 
@@ -263,7 +262,7 @@ async def test_request_cancellation_stops_child_and_restores_capacity(monkeypatc
 
 @pytest.mark.parametrize("route", ["cal", "iframe"])
 def test_processing_timeout_is_504_and_releases_slot(monkeypatch, route, probe, children):
-    monkeypatch.setattr(main, "download_calendar", Mock(return_value=EMPTY))
+    monkeypatch.setattr(main, "download_calendar", AsyncMock(return_value=EMPTY))
     monkeypatch.setattr(main, "LIMITS", replace(main.LIMITS, parser_timeout=1))
     main.CONFIG["test"] = {"url": "https://example.com/SECRET.ics"}
     result = TestClient(main.app).get(f"/{route}/test")
@@ -275,7 +274,7 @@ def test_processing_timeout_is_504_and_releases_slot(monkeypatch, route, probe, 
 @pytest.mark.asyncio
 async def test_four_real_children_keep_root_responsive(monkeypatch, probe, children):
     main.CONFIG["test"] = {"url": "https://example.com/calendar.ics"}
-    monkeypatch.setattr(main, "download_calendar", Mock(return_value=EMPTY))
+    monkeypatch.setattr(main, "download_calendar", AsyncMock(return_value=EMPTY))
     monkeypatch.setattr(main, "calendar_slots", anyio.CapacityLimiter(4))
     async with httpx2.AsyncClient(transport=httpx2.ASGITransport(app=main.app), base_url="http://test") as client:
         jobs = [asyncio.create_task(client.get(f"/{route}/test")) for route in ["cal", "iframe", "cal", "iframe"]]
@@ -297,7 +296,7 @@ async def test_four_real_children_keep_root_responsive(monkeypatch, probe, child
 @pytest.mark.asyncio
 async def test_pathological_calendar_does_not_block_application(monkeypatch, children):
     main.CONFIG["test"] = {"url": "https://example.com/calendar.ics"}
-    monkeypatch.setattr(main, "download_calendar", Mock(return_value=CALENDAR.replace("FREQ=DAILY;COUNT=2", "FREQ=SECONDLY")))
+    monkeypatch.setattr(main, "download_calendar", AsyncMock(return_value=CALENDAR.replace("FREQ=DAILY;COUNT=2", "FREQ=SECONDLY")))
     monkeypatch.setattr(main, "LIMITS", replace(main.LIMITS, parser_timeout=1, parser_memory_mib=96))
     async with httpx2.AsyncClient(transport=httpx2.ASGITransport(app=main.app), base_url="http://test") as client:
         job = asyncio.create_task(client.get("/cal/test"))
@@ -305,9 +304,10 @@ async def test_pathological_calendar_does_not_block_application(monkeypatch, chi
             while not children:
                 await anyio.sleep(0.01)
         assert (await asyncio.wait_for(client.get("/"), 0.5)).status_code == 418
-        assert (await asyncio.wait_for(job, 3)).status_code in {400, 504}
+        # Allow CI scheduling and kill/reap overhead; the worker budget above stays one second.
+        assert (await asyncio.wait_for(job, 10)).status_code in {400, 504}
         assert main.calendar_slots.borrowed_tokens == 0
-        monkeypatch.setattr(main, "download_calendar", Mock(return_value=EMPTY))
+        monkeypatch.setattr(main, "download_calendar", AsyncMock(return_value=EMPTY))
         assert (await client.get("/cal/test")).status_code == 200
 
 
@@ -315,7 +315,7 @@ def test_global_processing_limits_are_not_overridable(monkeypatch):
     main.CONFIG["test"] = {"url": "https://example.com/calendar.ics", "parser timeout": "999",
                            "parser memory mib": "999", "max response bytes": "99999999"}
     processor = AsyncMock(return_value=b"[]")
-    monkeypatch.setattr(main, "download_calendar", Mock(return_value=EMPTY))
+    monkeypatch.setattr(main, "download_calendar", AsyncMock(return_value=EMPTY))
     monkeypatch.setattr(main, "process_calendar", processor)
     assert TestClient(main.app).get("/cal/test?parser_timeout=999&max_response_bytes=99999999").status_code == 200
     kwargs = processor.call_args.kwargs

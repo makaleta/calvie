@@ -5,11 +5,12 @@ from email.message import Message
 import ipaddress
 import re
 import socket
-import time
+import asyncio
 from urllib.parse import quote, urljoin, urlsplit, urlunsplit
 import zlib
 
-import urllib3
+import anyio
+import httpx2
 
 
 class CalendarSourceError(ValueError):
@@ -20,14 +21,7 @@ class CalendarDownloadTimeout(CalendarSourceError, TimeoutError):
     """The shared download time budget has expired."""
 
 
-def _remaining_time(deadline: float) -> float:
-    remaining = deadline - time.monotonic()
-    if remaining <= 0:
-        raise CalendarDownloadTimeout("Calendar download timed out")
-    return remaining
-
-
-def _read_body(response, max_bytes: int, deadline: float) -> bytes:
+async def _read_body(response, max_bytes: int) -> bytes:
     """Bound both wire bytes and decompressed output without an unbounded flush."""
     length = response.headers.get("Content-Length")
     if length is not None:
@@ -41,12 +35,8 @@ def _read_body(response, max_bytes: int, deadline: float) -> bytes:
     header = b""
     output = bytearray()
     transferred = 0
-    while True:
-        _remaining_time(deadline)
-        chunk = response.read1(min(65536, max_bytes - transferred + 1), decode_content=False)
-        _remaining_time(deadline)
-        if not chunk:
-            break
+    async for chunk in response.aiter_raw(chunk_size=65536):
+        await anyio.lowlevel.checkpoint()
         transferred += len(chunk)
         if transferred > max_bytes:
             raise CalendarSourceError("Calendar is too large")
@@ -62,7 +52,7 @@ def _read_body(response, max_bytes: int, deadline: float) -> bytes:
             decoder = zlib.decompressobj(zlib.MAX_WBITS if wrapped else -zlib.MAX_WBITS)
             chunk, header = header, b""
         while chunk:
-            _remaining_time(deadline)
+            await anyio.lowlevel.checkpoint()
             if decoder.eof:
                 if encoding != "gzip":
                     raise CalendarSourceError("Unexpected data after compressed calendar")
@@ -163,11 +153,11 @@ def _public_address(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> b
     return True
 
 
-def _resolve(source: CalendarURL, allow_private: bool) -> str:
+async def _resolve(source: CalendarURL, allow_private: bool) -> str:
     try:
         addresses = [ipaddress.ip_address(source.host)]
     except ValueError:
-        answers = socket.getaddrinfo(source.host, source.port, type=socket.SOCK_STREAM)
+        answers = await _lookup(source.host, source.port)
         addresses = [ipaddress.ip_address(answer[4][0]) for answer in answers]
     if not addresses or (not allow_private and not all(_public_address(ip) for ip in addresses)):
         raise CalendarSourceError("Calendar destination is not allowed")
@@ -175,53 +165,56 @@ def _resolve(source: CalendarURL, allow_private: bool) -> str:
     return str(addresses[0])
 
 
-def download_calendar(url: str, *, allow_private_network: bool = False,
-                      max_bytes: int = 5242880, timeout: int = 60) -> str:
-    """Validate each hop and pin its connection to an already checked IP address."""
+async def _lookup(host, port):
+    return await asyncio.get_running_loop().getaddrinfo(host, port, type=socket.SOCK_STREAM)
+
+
+async def download_calendar(url: str, *, allow_private_network: bool = False,
+                            max_bytes: int = 5242880, timeout: int = 60) -> str:
+    """Bound the whole async download, including DNS, headers and all redirects."""
     if max_bytes < 1 or timeout <= 0:
         raise ValueError("Download limits must be positive")
-    deadline = time.monotonic() + timeout
-    source = normalize_url(url)
-    private_origin = source.origin if allow_private_network else None
-    for hop in range(6):
-        _remaining_time(deadline)
-        address = _resolve(source, allow_private=source.origin == private_origin)
-        remaining = _remaining_time(deadline)
-        options = {"timeout": urllib3.Timeout(connect=min(5, remaining), read=min(10, remaining)), "retries": False}
-        if source.scheme == "https":
-            pool = urllib3.HTTPSConnectionPool(
-                address, source.port, server_hostname=source.host,
-                assert_hostname=source.host, cert_reqs="CERT_REQUIRED", **options,
-            )
-        else:
-            pool = urllib3.HTTPConnectionPool(address, source.port, **options)
-        response = None
-        try:
-            response = pool.urlopen(
-                "GET", source.target, headers={"Host": source.authority},
-                redirect=False, retries=False, preload_content=False,
-            )
-            _remaining_time(deadline)
-            if response.status in {301, 302, 303, 307, 308}:
-                location = response.headers.get("Location")
-                if (not location or hop == 5 or "\\" in location or "#" in location
-                        or any(ord(c) <= 32 or ord(c) == 127 for c in location)):
-                    raise CalendarSourceError("Invalid calendar redirect")
-                following = normalize_url(urljoin(source.url, location))
-                if source.scheme == "https" and following.scheme == "http":
-                    raise CalendarSourceError("Insecure calendar redirect")
-                source = following
-                continue
-            if not 200 <= response.status < 300:
-                raise CalendarSourceError("Calendar source is unavailable")
-            data = _read_body(response, max_bytes, deadline)
-            content_type = Message()
-            content_type["Content-Type"] = response.headers.get("Content-Type", "")
-            return data.decode(content_type.get_content_charset() or "utf-8").replace("\r", "")
-        finally:
-            try:
-                if response is not None:
-                    response.close()
-            finally:
-                pool.close()
+    try:
+        with anyio.fail_after(timeout):
+            source = normalize_url(url)
+            private_origin = source.origin if allow_private_network else None
+            for hop in range(6):
+                address = await _resolve(source, allow_private=source.origin == private_origin)
+                target = httpx2.URL(scheme=source.scheme, host=address, port=source.port,
+                                    raw_path=source.target.encode("ascii"))
+                # A fresh client also prevents cookie/TLS reuse across logical hosts sharing an IP.
+                client = httpx2.AsyncClient(trust_env=False, follow_redirects=False,
+                                            timeout=httpx2.Timeout(10, connect=5))
+                response = None
+                try:
+                    request = client.build_request("GET", target, headers={"Host": source.authority},
+                                                   extensions={"sni_hostname": source.host})
+                    response = await client.send(request, stream=True)
+                    if response.status_code in {301, 302, 303, 307, 308}:
+                        location = response.headers.get("Location")
+                        if (not location or hop == 5 or "\\" in location or "#" in location
+                                or any(ord(c) <= 32 or ord(c) == 127 for c in location)):
+                            raise CalendarSourceError("Invalid calendar redirect")
+                        following = normalize_url(urljoin(source.url, location))
+                        if source.scheme == "https" and following.scheme == "http":
+                            raise CalendarSourceError("Insecure calendar redirect")
+                        source = following
+                        continue
+                    if not 200 <= response.status_code < 300:
+                        raise CalendarSourceError("Calendar source is unavailable")
+                    data = await _read_body(response, max_bytes)
+                    content_type = Message()
+                    content_type["Content-Type"] = response.headers.get("Content-Type", "")
+                    result = data.decode(content_type.get_content_charset() or "utf-8").replace("\r", "")
+                    await anyio.lowlevel.checkpoint()
+                    return result
+                finally:
+                    with anyio.CancelScope(shield=True):
+                        try:
+                            if response is not None:
+                                await response.aclose()
+                        finally:
+                            await client.aclose()
+    except (TimeoutError, httpx2.TimeoutException):
+        raise CalendarDownloadTimeout("Calendar download timed out") from None
     raise CalendarSourceError("Too many calendar redirects")

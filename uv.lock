@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.14, <4"
 
 [[package]]
@@ -50,17 +50,16 @@ dependencies = [
     { name = "anyio" },
     { name = "babel" },
     { name = "fastapi" },
+    { name = "httpx2" },
     { name = "icalevents" },
     { name = "jinja2" },
     { name = "pytz" },
     { name = "starlette" },
-    { name = "urllib3" },
     { name = "uvicorn" },
 ]
 
 [package.dev-dependencies]
 dev = [
-    { name = "httpx2" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
 ]
@@ -70,17 +69,16 @@ requires-dist = [
     { name = "anyio", specifier = ">=4.15.1,<5" },
     { name = "babel", specifier = ">=2.18.0,<3" },
     { name = "fastapi", specifier = ">=0.141.1,<0.142" },
+    { name = "httpx2", specifier = ">=2.13.0,<3" },
     { name = "icalevents", specifier = ">=0.3.1,<0.4" },
     { name = "jinja2", specifier = ">=3.1.6,<4" },
     { name = "pytz", specifier = ">=2026.3.post1" },
     { name = "starlette", specifier = ">=1.6.0,<2" },
-    { name = "urllib3", specifier = ">=2.8.0,<3" },
     { name = "uvicorn", specifier = ">=0.53.0,<0.54" },
 ]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "httpx2", specifier = ">=2.13.0,<3" },
     { name = "pytest", specifier = ">=9.1.1,<10" },
     { name = "pytest-asyncio", specifier = ">=1.4.0,<2" },
 ]

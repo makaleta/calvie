@@ -13,7 +13,7 @@ from fastapi.templating import Jinja2Templates
 from starlette import status
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, Response
-from urllib3.exceptions import TimeoutError as HTTPTimeoutError
+
 
 from calendar_source import CalendarDownloadTimeout, download_calendar, is_ics_url
 from calendar_processing import (CalendarProcessStartError, CalendarProcessingTimeout,
@@ -59,7 +59,6 @@ class ResourceLimits:
 
 LIMITS = ResourceLimits.from_config()
 calendar_slots = anyio.CapacityLimiter(LIMITS.max_concurrent_calendars)
-calendar_threads = anyio.CapacityLimiter(LIMITS.max_concurrent_calendars)
 calendar_jobs = set()
 
 app = FastAPI(version=os.getenv('VERSION', 'DEVEL'), name="CalVie", description="Simple iCal viewer", )
@@ -73,12 +72,23 @@ async def root():
 
 async def _run_calendar_job(borrower, slots, url, allow_private_network, payload, cancelled):
     try:
-        def download():
-            return download_calendar(url, allow_private_network=allow_private_network,
-                                     max_bytes=LIMITS.max_calendar_bytes, timeout=LIMITS.download_timeout)
-        payload["content"] = await anyio.to_thread.run_sync(
-            download, abandon_on_cancel=False, limiter=calendar_threads,
-        )
+        error = None
+        with anyio.CancelScope() as download_scope:
+            async def watch_cancel():
+                await cancelled.wait()
+                download_scope.cancel()
+            async with anyio.create_task_group() as watchers:
+                watchers.start_soon(watch_cancel)
+                try:
+                    payload["content"] = await download_calendar(
+                        url, allow_private_network=allow_private_network,
+                        max_bytes=LIMITS.max_calendar_bytes, timeout=LIMITS.download_timeout)
+                except Exception as exc:
+                    error = exc
+                finally:
+                    watchers.cancel_scope.cancel()
+        if error is not None:
+            raise error
         if cancelled.is_set():
             raise CalendarProcessingCancelled("Calendar request cancelled")
         return await process_calendar(payload, timeout=LIMITS.parser_timeout, memory_mib=LIMITS.parser_memory_mib,
@@ -151,7 +161,7 @@ async def _calendar_response(name, timezone, days, *, request=None, render_optio
     except asyncio.CancelledError:
         cancelled.set()
         raise
-    except (CalendarDownloadTimeout, HTTPTimeoutError):
+    except CalendarDownloadTimeout:
         raise HTTPException(504, detail="Calendar download timed out") from None
     except CalendarProcessingTimeout:
         raise HTTPException(504, detail="Calendar processing timed out") from None

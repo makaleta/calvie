@@ -96,12 +96,12 @@ errors without exposing source URLs.
 
 ### Resource limits
 
-Calendar downloads run in worker threads. Parsing, timezone conversion, and
+Calendar downloads use the asynchronous httpx2 client. Parsing, timezone conversion, and
 JSON/HTML preparation run in a fresh Linux process for each request.
 Both calendar routes share four loading slots per application worker. Once all
 slots are occupied, new calendar requests receive HTTP 503 and `Retry-After: 1`
-without queuing. An interrupted download retains its slot until the thread
-finishes and does not then start a parser. An interrupted parser is killed and
+without queuing. An interrupted download is cancelled and closes its HTTP resources before
+releasing its slot; it does not then start a parser. An interrupted parser is killed and
 reaped before its slot is released. With multiple Uvicorn workers, each worker
 has its own slots.
 
@@ -133,10 +133,14 @@ Size and event-count failures return HTTP 400, and download timeouts return
 HTTP 504. The iframe renders these errors with the same status and retry header.
 Invalid timezone or locale also returns 422 before downloading.
 
-The download budget covers all redirects and body reads and is checked between
-operations. Connection/read timeouts remain at most 5/10 seconds, shortened when
-the remaining budget is smaller. The budget cannot forcibly interrupt DNS or
-an internally blocked operation, so it is not a strict wall-clock deadline.
+A single asynchronous `download timeout` covers DNS, connection, TLS, headers,
+all redirects and the complete response body. Slow continuous traffic cannot
+restart that deadline. Per-operation timeouts remain connect 5 seconds and
+read/write/pool 10 seconds. Cleanup closes responses and clients before capacity
+is released. An OS DNS lookup may finish in the background after cancellation;
+the application stops waiting for it. No downloader subprocess or extra memory
+limit is added. This is not an overall incoming-request timeout; Uvicorn's
+keep-alive and shutdown timeouts do not limit request-handler execution.
 
 The processing timeout covers process startup, input transfer, parsing, and
 response preparation. A timed-out process is killed and reaped and returns 504.
