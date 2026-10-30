@@ -249,8 +249,12 @@ not be confirmed for this personal-account repository; GitHub currently document
 them as an Enterprise Cloud preview. No preview lockfile is assumed to provide
 protection here. The local reusable test workflow runs from the same commit.
 
-Dependabot checks GitHub Actions every Monday at 09:00 Europe/Prague and groups
-version updates into one PR. Review the upstream release and commit changes,
+Dependabot checks GitHub Actions, Python dependencies (`pyproject.toml` and
+`uv.lock`, using the `uv` ecosystem), and Dockerfile image references every
+Monday at 09:00 Europe/Prague. Version updates are grouped into one PR per
+ecosystem. Production and development Python dependencies are included.
+Updates require manual review and passing checks; automerge is not configured.
+Review the upstream release and commit changes for GitHub Actions,
 verify the full SHAs and version comments, and merge manually after checks pass.
 For a manual update, resolve the intended tag in the official upstream repository
 (including annotated tags), verify its commit, and update all matching uses.
@@ -261,8 +265,20 @@ Docker publishing still runs only after tests succeed for the same commit.
 The publishing job requires `refs/heads/master` for both push and manual runs;
 manual runs from another branch or tag may test but cannot log in to Docker Hub
 or overwrite `mkal/calvie:latest` and the project-version tag. Checkout steps do
-not retain Git credentials. Docker base images and Python dependency versions
-are maintained separately from this Actions update schedule.
+not retain Git credentials.
+
+Docker updates keep the Python image on the 3.14 series to match CI; upgrading
+the Python series requires a coordinated manual change. When updating the uv
+image, also keep the uv version in the test and Copilot setup workflows aligned.
+Dependabot version checks are not an image vulnerability scan and cannot detect
+rebuilds published under the same mutable image tag; rebuild deployed images
+regularly to pick up those fixes.
+
+In GitHub Settings > Advanced Security, verify that the dependency graph,
+Dependabot alerts, and Dependabot security updates are enabled. The configuration
+file schedules version updates; it does not enable these repository settings.
+Security update PRs, when enabled and supported, are separate from the weekly
+version-update groups and should be reviewed promptly.
 
 After merging, verify successful test/CodeQL runs and a Docker run on master;
 check that manually selected non-master refs skip the publishing job. These

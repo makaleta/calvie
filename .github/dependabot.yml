@@ -10,3 +10,27 @@ updates:
     groups:
       github-actions:
         patterns: ["*"]
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Europe/Prague
+    groups:
+      python-dependencies:
+        patterns: ["*"]
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Europe/Prague
+    groups:
+      docker-images:
+        patterns: ["*"]
+    ignore:
+      # Keep the runtime aligned with Python 3.14 in CI.
+      - dependency-name: python
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
