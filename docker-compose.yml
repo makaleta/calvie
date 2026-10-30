@@ -2,6 +2,10 @@ services:
   main:
     image: "mkal/calvie:latest"
     restart: unless-stopped
+    mem_limit: 1536m
+    memswap_limit: 1536m
+    cpus: 2.0
+    pids_limit: 64
     user: "${CALVIE_UID:-10001}:${CALVIE_GID:-10001}"
     group_add: ["${CALVIE_SOCKET_GID:-33}"]
     read_only: true
@@ -28,6 +32,10 @@ services:
     profiles: ["upgrade"]
     image: "mkal/calvie:latest"
     restart: unless-stopped
+    mem_limit: 1536m
+    memswap_limit: 1536m
+    cpus: 2.0
+    pids_limit: 64
     user: "${CALVIE_UID:-10001}:${CALVIE_GID:-10001}"
     group_add: ["${CALVIE_SOCKET_GID:-33}"]
     read_only: true

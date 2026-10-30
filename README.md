@@ -191,6 +191,16 @@ drop all capabilities, prevent privilege escalation, and use an init process.
 Only the socket directory and a 64 MiB `/tmp` tmpfs are writable; configuration
 is mounted read-only. Missing bind sources cause startup to fail instead of
 being created by Docker.
+
+Each service is limited to 1536 MiB of RAM, no swap, two CPUs, and 64 processes
+and threads combined. These defaults assume one Uvicorn worker, four concurrent
+calendars, and the 256 MiB address-space limit per parser. Container memory limits
+cover the parent, all children, response buffers, and tmpfs usage; they complement
+the individual parser limits. Reaching the memory limit can cause an OOM kill.
+During an upgrade, `main` and `backup` can together use up to 3 GiB of RAM;
+leave additional memory for the host and reverse proxy. If increasing the number
+of workers, concurrent calendars, or parser memory, reassess the container limits.
+
 Use a current stable Docker Compose release. Old prereleases such as
 `v2.0.0-rc.3` can silently discard `group_add` and bind-source creation settings;
 check that `docker compose --profile upgrade config` preserves them before deploying.
