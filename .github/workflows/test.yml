@@ -6,8 +6,12 @@ permissions:
 on:
   pull_request:
   push:
-    branches: [ "master", "develop" ]
+    branches: [ "develop" ]
   workflow_call:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   test:

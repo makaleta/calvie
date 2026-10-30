@@ -226,6 +226,7 @@ def test_partial_worker_failure_never_becomes_success(monkeypatch, route, probe,
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cancellation", ["task", "disconnect"])
 async def test_request_cancellation_stops_child_and_restores_capacity(monkeypatch, probe, children, cancellation):
+    from fastapi import HTTPException
     from starlette.requests import Request
 
     main.CONFIG["test"] = {"url": "https://example.com/calendar.ics"}
@@ -234,7 +235,9 @@ async def test_request_cancellation_stops_child_and_restores_capacity(monkeypatc
     disconnected = anyio.Event()
 
     async def receive():
-        await disconnected.wait()
+        # An available ASGI message must return without a cancellation checkpoint.
+        if not disconnected.is_set():
+            await disconnected.wait()
         return {"type": "http.disconnect"}
 
     request = Request({"type": "http", "headers": []}, receive)
@@ -243,15 +246,17 @@ async def test_request_cancellation_stops_child_and_restores_capacity(monkeypatc
         while not children:
             await anyio.sleep(0.01)
     assert main.calendar_slots.borrowed_tokens == 1
-    if cancellation == "task":
-        task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await task
-    else:
-        disconnected.set()
-        with pytest.raises(Exception):
-            await task
-    await asyncio.gather(*tuple(main.calendar_jobs), return_exceptions=True)
+    with anyio.fail_after(2):
+        if cancellation == "task":
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        else:
+            disconnected.set()
+            with pytest.raises(HTTPException) as error:
+                await task
+            assert error.value.status_code == 400
+        await asyncio.gather(*tuple(main.calendar_jobs), return_exceptions=True)
     assert main.calendar_slots.borrowed_tokens == 0
     assert children[0].returncode is not None
     monkeypatch.setattr(processing, "WORKER_PATH", Path(processing.__file__).with_name("calendar_worker.py"))

@@ -230,7 +230,7 @@ def tls_calendar_server():
         lambda _sock, name, _ctx: server.received_sni.append(name)
     )
     server.socket = context.wrap_socket(server.socket, server_side=True)
-    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     worker.start()
     try:
         yield server, pem

@@ -279,7 +279,7 @@ async def test_real_chunked_and_gzip_responses_are_limited():
                 self.wfile.write(b"0\r\n\r\n")
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     worker.start()
     try:
         for path in ["/chunked", "/gzip"]:
